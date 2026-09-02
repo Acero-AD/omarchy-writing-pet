@@ -59,15 +59,15 @@ Each cycle SHALL first list files modified within the lookback window using a me
 - **WHEN** one file changes in a directory holding 2000 documents
 - **THEN** exactly one file is read and re-counted
 
-### Requirement: File-modification queries use an absolute timestamp
-The engine SHALL pass an absolute epoch cutoff to the file-modification scan and MUST NOT rely on relative time expressions, because the available `find` implementation may reject them.
+### Requirement: The modification scan does not depend on an external tool
+The engine SHALL determine which files changed in-process, comparing each candidate's modification time against an absolute cutoff. It MUST NOT shell out to `find` or any equivalent, because implementations differ in ways that fail silently: the previous version passed a relative timestamp that GNU findutils accepts and `bfs` rejects outright, so on an Omarchy machine the scan errored on every cycle and counted nothing.
 
-#### Scenario: Works against a find that rejects relative times
-- **WHEN** the engine runs on a system where `find` is `bfs`
-- **THEN** the scan succeeds and returns the expected changed files
+#### Scenario: No external tool is involved in the scan
+- **WHEN** a counting cycle runs
+- **THEN** no subprocess is spawned for the modification scan, on any system
 
-#### Scenario: A failing scan is reported, never silent
-- **WHEN** the file-modification scan exits non-zero or writes to stderr
+#### Scenario: An unreadable path is reported, never silent
+- **WHEN** a watched path cannot be walked or a file cannot be read
 - **THEN** the engine logs the failure rather than treating it as "nothing changed"
 
 ### Requirement: Totals are re-derived, and progress never decreases

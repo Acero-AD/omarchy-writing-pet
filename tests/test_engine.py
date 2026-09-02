@@ -181,6 +181,98 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class TestTracker(unittest.TestCase):
+    def test_seeding_an_existing_vault_contributes_nothing(self):
+        t = engine.Tracker()
+        t.seed("/vault/old.md", 200000)
+        self.assertEqual(t.total(), 0)
+
+    def test_a_file_created_while_watching_counts_in_full(self):
+        # The e2e test caught this: a brand new note you just wrote is not the
+        # same as a vault that was already there.
+        t = engine.Tracker()
+        t.observe("/vault/new.md", 10)
+        self.assertEqual(t.total(), 10)
+
+    def test_words_added_after_a_baseline_are_counted(self):
+        t = engine.Tracker()
+        t.seed("/a.md", 1000)
+        t.observe("/a.md", 1412)
+        self.assertEqual(t.total(), 412)
+
+    def test_recount_is_idempotent(self):
+        t = engine.Tracker()
+        t.seed("/a.md", 1000)
+        t.observe("/a.md", 1412)
+        t.observe("/a.md", 1412)
+        t.observe("/a.md", 1412)
+        self.assertEqual(t.total(), 412)
+
+    def test_deleting_never_reduces_the_total(self):
+        t = engine.Tracker()
+        t.seed("/a.md", 0)
+        t.observe("/a.md", 800)
+        t.observe("/a.md", 500)
+        self.assertEqual(t.total(), 800, "the critter must never walk backwards")
+
+    def test_net_mode_does_subtract(self):
+        t = engine.Tracker()
+        t.seed("/a.md", 0)
+        t.observe("/a.md", 800, "net")
+        t.observe("/a.md", 500, "net")
+        self.assertEqual(t.total(), 500)
+
+    def test_seed_does_not_clobber_a_known_file(self):
+        t = engine.Tracker()
+        t.seed("/a.md", 0)
+        t.observe("/a.md", 300)
+        t.seed("/a.md", 300)  # a later seeding pass must not erase progress
+        self.assertEqual(t.total(), 300)
+
+    def test_forget_and_rebase(self):
+        t = engine.Tracker()
+        t.seed("/a.md", 100); t.observe("/a.md", 400)
+        t.seed("/b.md", 0); t.observe("/b.md", 60)
+        self.assertEqual(t.total(), 360)
+        t.forget("/b.md")
+        self.assertEqual(t.total(), 300)
+        t.rebase("/a.md")
+        self.assertEqual(t.total(), 0)
+
+    def test_carry_forward_zeroes_today_but_keeps_baselines(self):
+        t = engine.Tracker()
+        t.seed("/a.md", 1000); t.observe("/a.md", 1500)
+        nxt = t.carry_forward()
+        self.assertEqual(nxt.total(), 0)
+        self.assertEqual(nxt.files["/a.md"].base, 1500)
+        nxt.observe("/a.md", 1600)
+        self.assertEqual(nxt.total(), 100)
+
+    def test_json_round_trip(self):
+        t = engine.Tracker()
+        t.seed("/a.md", 100); t.observe("/a.md", 250)
+        again = engine.Tracker.from_json(t.to_json())
+        self.assertEqual(again.total(), t.total())
+        self.assertEqual(engine.Tracker.from_json("garbage").total(), 0)
+
+
+class TestWordCounting(unittest.TestCase):
+    def test_basic(self):
+        self.assertEqual(engine.count_words("the cat sat on the mat"), 6)
+        self.assertEqual(engine.count_words("  spaced \n out \t here "), 3)
+
+    def test_empty(self):
+        self.assertEqual(engine.count_words(""), 0)
+        self.assertEqual(engine.count_words("   \n\t "), 0)
+
+    def test_punctuation_does_not_split(self):
+        self.assertEqual(engine.count_words("Hello, world! It's fine."), 4)
+
+    def test_cjk_counted_per_character(self):
+        self.assertEqual(engine.count_words("日本語"), 3)
+        self.assertEqual(engine.count_words("hello 日本語 world"), 5)
+
+
 class TestAppMatching(unittest.TestCase):
     def test_exact_case_insensitive(self):
         self.assertTrue(engine.app_matches("typora", "typora"))

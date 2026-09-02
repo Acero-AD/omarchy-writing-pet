@@ -15,6 +15,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import select
 import socket
 import subprocess
@@ -61,6 +62,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 POLL_MIN, POLL_MAX = 1, 30
+HISTORY_MAX = 365
 
 
 class ConfigError(Exception):
@@ -152,6 +154,139 @@ class Log:
         stamp = time.strftime("%H:%M:%S")
         detail = " ".join(f"{k}={v}" for k, v in fields.items())
         print(f"{stamp} {event}" + (f"  {detail}" if detail else ""), flush=True)
+
+
+# ----------------------------------------------------------------- counting
+
+# CJK scripts do not delimit words with spaces, so whitespace splitting would
+# score a whole paragraph as one word. Counting each ideograph overshoots -- most
+# words are one or two characters -- but it is stable and predictable, which
+# matters more for a progress bar than linguistic accuracy. Documented as a
+# known approximation.
+CJK = re.compile(
+    "[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f]"
+)
+
+
+def count_words(text: str) -> int:
+    if not text:
+        return 0
+    cjk = len(CJK.findall(text))
+    return len(CJK.sub(" ", text).split()) + cjk
+
+
+@dataclass
+class FileRecord:
+    """base  — word count when the day started, or when first seen
+    last  — most recently observed count
+    peak  — high-water mark of (last - base) today"""
+
+    base: int
+    last: int
+    peak: int = 0
+
+
+class Tracker:
+    """Today's total is the sum of per-file high-water marks.
+
+    That is re-derived from stored numbers rather than accumulated, so counting
+    an unchanged file twice is a no-op and an overlapping scan window cannot
+    double-count. The high-water mark also means cutting a paragraph never takes
+    back progress already earned -- a counter that falls when you edit teaches
+    you not to edit.
+    """
+
+    def __init__(self, files: dict[str, FileRecord] | None = None) -> None:
+        self.files: dict[str, FileRecord] = files or {}
+
+    def seed(self, path: str, words: int) -> None:
+        """Record a pre-existing file's count as its baseline, contributing zero.
+
+        This is how pointing the engine at a vault full of old notes adds
+        nothing to today. It is deliberately separate from observe(): a file
+        that appears *after* seeding was written while we were watching, and
+        every word of it counts.
+        """
+        words = max(0, int(words))
+        if path not in self.files:
+            self.files[path] = FileRecord(base=words, last=words, peak=0)
+
+    def observe(self, path: str, words: int, net_mode: str = "additive") -> None:
+        words = max(0, int(words))
+        record = self.files.get(path)
+        if record is None:
+            # Unseen at this point means created since seeding: you wrote it, so
+            # all of it counts. Pre-existing files were given a baseline by
+            # seed() before the first cycle ran.
+            self.files[path] = FileRecord(base=0, last=words, peak=words if net_mode != "net" else words)
+            return
+        record.last = words
+        delta = words - record.base
+        if net_mode == "net":
+            record.peak = delta
+        else:
+            record.peak = max(record.peak, delta, 0)
+
+    def forget(self, path: str) -> None:
+        self.files.pop(path, None)
+
+    def rebase(self, path: str) -> None:
+        record = self.files.get(path)
+        if record is not None:
+            record.base, record.peak = record.last, 0
+
+    def total(self) -> int:
+        return max(0, sum(r.peak for r in self.files.values()))
+
+    def carry_forward(self) -> "Tracker":
+        """New day: today's counts become tomorrow's baselines."""
+        return Tracker({p: FileRecord(base=r.last, last=r.last, peak=0) for p, r in self.files.items()})
+
+    def to_json(self) -> dict[str, list[int]]:
+        return {p: [r.base, r.last, r.peak] for p, r in self.files.items()}
+
+    @classmethod
+    def from_json(cls, raw: Any) -> "Tracker":
+        files: dict[str, FileRecord] = {}
+        if isinstance(raw, dict):
+            for path, triple in raw.items():
+                if isinstance(triple, list) and len(triple) == 3 and all(isinstance(n, int) for n in triple):
+                    files[path] = FileRecord(*triple)
+        return cls(files)
+
+
+def scan(paths: list[Path], extensions: list[str], cutoff: float, log: Log) -> list[Path]:
+    """Metadata-only: stat every candidate, read none.
+
+    Deliberately in-process. The previous version shelled out to `find` with a
+    relative timestamp, which GNU findutils accepts and bfs -- what Omarchy
+    ships -- rejects outright, so the scan errored every cycle and counted
+    nothing, silently.
+    """
+    suffixes = tuple(extensions)
+    changed: list[Path] = []
+    for root in paths:
+        try:
+            for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error(log)):
+                dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "node_modules"]
+                for name in filenames:
+                    if not name.endswith(suffixes):
+                        continue
+                    candidate = Path(dirpath) / name
+                    try:
+                        if candidate.stat().st_mtime > cutoff:
+                            changed.append(candidate)
+                    except OSError as exc:
+                        log("scan.stat_failed", path=candidate, error=exc)
+        except OSError as exc:
+            log("scan.failed", path=root, error=exc)
+    return changed
+
+
+def _walk_error(log: Log):
+    def handler(exc: OSError) -> None:
+        log("scan.walk_failed", path=getattr(exc, "filename", "?"), error=exc)
+    return handler
 
 
 # ----------------------------------------------------------------- focus
@@ -266,6 +401,11 @@ class Engine:
         self.focused_app: str = ""
         self.last_writing_at: float = 0.0
         self._gate_open: bool = False
+        self.state_path: Path = STATE_PATH
+        self.today: str = local_date()
+        self.history: list[dict[str, Any]] = []
+        self.tracker: Tracker = Tracker()
+        self.words: int = 0
 
     # ---- the gate: the whole activation model, a pure function of focus ----
 
@@ -309,8 +449,97 @@ class Engine:
             self.log("gate." + ("open" if self._gate_open else "closed"), reason="grace expired")
         return self._gate_open
 
+    # ------------------------------------------------------------- state
+
+    def load_state(self, path: Path = None) -> None:
+        path = STATE_PATH if path is None else path
+        self.state_path = path
+        raw = read_state(path) or {}
+        self.today = str(raw.get("date") or local_date())
+        self.history = raw.get("history") if isinstance(raw.get("history"), list) else []
+        self.tracker = Tracker.from_json(raw.get("tracking"))
+        self.words = self.tracker.total()
+        self.check_rollover()
+
+    def write_state(self) -> None:
+        payload = {
+            "schema": 1,
+            "date": self.today,
+            "goal": int(self.config.values["goal"]),
+            "wordsToday": self.words,
+            "byOrigin": {"filewatch": self.words},
+            "history": self.history[-HISTORY_MAX:],
+            "mascot": self.config.values["mascot"],
+            "gateOpen": self._gate_open,
+            "updatedAt": time.time(),
+            "tracking": self.tracker.to_json(),
+        }
+        write_atomic(self.state_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    def check_rollover(self, today: str | None = None) -> bool:
+        today = local_date() if today is None else today
+        if today == self.today:
+            return False
+        self.history = (self.history + [
+            {"date": self.today, "words": self.words, "goal": int(self.config.values["goal"])}
+        ])[-HISTORY_MAX:]
+        # Baselines carry forward, so yesterday's words are never re-counted and
+        # no file has to be re-read at midnight.
+        self.tracker = self.tracker.carry_forward()
+        self.today = today
+        self.words = 0
+        self.log("day.rollover", date=today, archived=len(self.history))
+        return True
+
+    def seed_baselines(self) -> int:
+        """Give every file already on disk a baseline, so existing writing is
+        not counted as today's. Runs once at startup; a file appearing after
+        this counts in full."""
+        seeded = 0
+        for path in scan(self.config.watch_paths, self.config.values["extensions"], -1.0, self.log):
+            key = str(path)
+            if key in self.tracker.files:
+                continue
+            try:
+                self.tracker.seed(key, count_words(path.read_text(errors="replace")))
+                seeded += 1
+            except OSError as exc:
+                self.log("seed.read_failed", path=path, error=exc)
+        if seeded:
+            self.log("seed.baselines", files=seeded)
+        return seeded
+
+    # ------------------------------------------------------------- cycle
+
     def cycle(self) -> None:
-        """One counting cycle. Implemented in task group 3."""
+        self.check_rollover()
+        cutoff = time.time() - self.config.lookback_seconds
+        changed = scan(self.config.watch_paths, self.config.values["extensions"], cutoff, self.log)
+        if not changed:
+            return
+
+        cap = int(self.config.values["recountCap"])
+        if len(changed) > cap:
+            # Bound a pathological cycle: a branch switch or a bulk import
+            # inside a watch directory must not turn one tick into thousands of
+            # reads.
+            self.log("cycle.capped", found=len(changed), cap=cap)
+            changed = changed[:cap]
+
+        before = self.words
+        for path in changed:
+            try:
+                text = path.read_text(errors="replace")
+            except OSError as exc:
+                self.log("cycle.read_failed", path=path, error=exc)
+                continue
+            self.tracker.observe(str(path), count_words(text), self.config.values["netMode"])
+
+        self.words = self.tracker.total()
+        self.write_state()
+        if self.words != before:
+            self.log("words.counted", added=self.words - before, today=self.words,
+                     goal=self.config.values["goal"], files=len(changed))
 
     def blocking_reason(self) -> str | None:
         """Why counting cannot happen right now, or None if it can."""
@@ -336,6 +565,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"\nnot counting: {blocked}", file=sys.stderr)
         return 1
 
+    engine.load_state()
+    engine.seed_baselines()
     focus = HyprlandFocus(log)
     engine.set_focus(focus.current())
     log("engine.ready", goal=config.values["goal"], paths=len(config.watch_paths),
@@ -395,11 +626,15 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def read_state() -> dict[str, Any] | None:
+def local_date() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
+def read_state(path: Path = None) -> dict[str, Any] | None:
     """Readers tolerate a missing or torn file; neither is an error."""
     try:
-        return json.loads(STATE_PATH.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
+        return json.loads((STATE_PATH if path is None else path).read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
 
 

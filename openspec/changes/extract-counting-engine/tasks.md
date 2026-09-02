@@ -17,21 +17,21 @@
 
 ## 3. Phase 1 — counting
 
-- [ ] 3.1 Implement the metadata-only probe using an absolute epoch cutoff, verified against `bfs` as well as GNU findutils
-- [ ] 3.2 Fail loudly on a non-zero probe or any stderr output, never treating it as "nothing changed"
-- [ ] 3.3 Implement targeted recount of only the changed files, with a per-cycle cap
-- [ ] 3.4 Port word counting, including the documented CJK approximation, with its test cases
-- [ ] 3.5 Port per-file baselines and the high-water-mark total, with its test cases: first sight contributes zero, re-reads are idempotent, deletions never reduce the total
-- [ ] 3.6 Port daily rollover and capped history, with the suspend-and-resume case
-- [ ] 3.7 Delete the JavaScript counting implementation once ported, so only one live copy exists
+- [x] 3.1 Implement the metadata-only probe in-process against an absolute cutoff, with no external tool _(revised: measured at 5.6-6.5 ms vs 3.8-4.9 ms for `find` on 2000 notes -- 1.7 ms per cycle to eliminate the bfs/GNU incompatibility that silently broke the previous version, plus the null-delimited parsing and path-with-newline edge cases)_
+- [x] 3.2 Fail loudly on an unwalkable path or unreadable file, never treating it as "nothing changed"
+- [x] 3.3 Implement targeted recount of only the changed files, with a per-cycle cap
+- [x] 3.4 Port word counting, including the documented CJK approximation, with its test cases
+- [x] 3.5 Port per-file baselines and the high-water-mark total, with its test cases: first sight contributes zero, re-reads are idempotent, deletions never reduce the total
+- [x] 3.6 Port daily rollover and capped history, with the suspend-and-resume case
+- [x] 3.7 Delete the JavaScript counting implementation once ported, so only one live copy exists
 
 ## 4. Phase 1 — state file
 
-- [ ] 4.1 Define and document the state file schema, including the last-update timestamp and the gate-open flag
-- [ ] 4.2 Write atomically via temporary file and rename
-- [ ] 4.3 Persist and restore across engine restarts without re-counting historical words
+- [x] 4.1 Define and document the state file schema, including the last-update timestamp and the gate-open flag
+- [x] 4.2 Write atomically via temporary file and rename
+- [x] 4.3 Persist and restore across engine restarts without re-counting historical words
 - [ ] 4.4 Document the file's location and the freshness window in a contract document for front-end authors
-- [ ] 4.5 Add `config` subcommands to add and remove watch paths and whitelist entries
+- [x] 4.5 Add `config` subcommands to add and remove watch paths and whitelist entries
 
 ## 5. Phase 1 — packaging and verification
 
