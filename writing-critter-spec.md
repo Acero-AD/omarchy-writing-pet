@@ -176,11 +176,16 @@ Maintain `lastKnownCounts: { path -> wordCount }`. The daily total is derived by
 
 Measured on this hardware (SSD, warm page cache), synthetic vaults of `.md` notes:
 
-| | 300 notes / 210k words / 2.4 MB | 2000 notes / 1.8M words / 16 MB |
+| | 300 notes / 210k words | 2000 notes / 1.8M words / 16 MB |
 |---|---|---|
-| full recount (`find` + `wc -w` on everything) | 8–9 ms | **38–40 ms** |
-| mtime probe only (`find -newermt`) | 2–3 ms | **2–3 ms** |
-| probe + recount of one changed file | — | **3 ms** |
+| full recount (`find` + `wc -w` on everything) | 8 ms (301 rows) | **38 ms (2002 rows)** |
+| mtime probe only, idle tick | 3 ms (0 rows) | **3 ms (0 rows)** |
+| probe + recount of one changed file | 4 ms (1 row) | **5 ms (1 row)** |
+
+Row counts are quoted because an earlier measurement of this table timed a
+`find` invocation that was silently erroring and matching nothing — fast, and
+meaningless. Any re-measurement must assert on rows returned, not just elapsed
+time.
 
 Full recount cost is proportional to *what the user owns*; probe cost is proportional to *what the user just wrote*, and is flat. At 2000 notes a naive full recount reads 16 MB from disk every 2 seconds, forever, inside the **shared long-lived `omarchy-shell` process**. That is the version that generates "this plugin thrashes my disk" issues after release.
 
@@ -224,6 +229,20 @@ mood independently.
 4. A delta counts toward today only if FocusTracker says it is attributable (§3.1) **and** the path is not claimed by an active companion (§3.3).
 5. **Negative deltas do not subtract** from the daily total; just update `lastKnownCounts[path]`. Deleting a paragraph must not erase the morning's progress. Config flag `netMode: "additive" | "net"`, default `additive`.
 6. Deleted/renamed watched files: drop from `lastKnownCounts` without touching the daily total.
+
+**`find` implementation portability — load-bearing.** `find` may be GNU findutils
+or **bfs**, which is what Omarchy ships (`/usr/bin/find` is `bfs 4.1.1`). bfs
+**rejects relative timestamps** outright: `-newermt '-3 seconds'` is an error, not
+a match failure. It accepts only ISO 8601 or `@<epoch>`.
+
+The probe MUST therefore compute an absolute cutoff and pass `-newermt @<epoch>`,
+which both implementations understand. Computing the cutoff in QML also removes
+any ambiguity about whose clock defines "now".
+
+The plugin MUST collect `stderr` from both the probe and the count process and
+log it. This is not defensive habit: the first implementation dropped stderr,
+so a probe that errored on every single tick counted nothing indefinitely with
+no log line and no visible symptom beyond a critter that never grew.
 
 **Implementation note.** Quickshell's `Process` does not use a shell, so wrap as `["sh", "-c", "..."]` or invoke `find`/`wc` with explicit args. Prefer `-print0` / `xargs -0` so paths with spaces survive. Cap the number of paths recounted in a single tick (default 200) to bound a pathological tick after e.g. a `git checkout` inside a watch dir.
 

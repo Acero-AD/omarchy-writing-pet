@@ -325,3 +325,54 @@ test("pathIsClaimed: matches on segment boundaries", () => {
   assert.equal(M.pathIsClaimed("/other/a.md", ["/vault"]), false);
   assert.equal(M.pathIsClaimed("/a.md", []), false);
 });
+
+// ---------------------------------------------------------- path discovery
+
+test("parseObsidianVaults: extracts vault paths from real config shape", () => {
+  const cfg = JSON.stringify({ vaults: {
+    "5e8ea54a4bca26ff": { path: "/mnt/HDD/OneDrive/Obsidian", ts: 1759081367939, open: true }
+  }});
+  assert.deepEqual(M.parseObsidianVaults(cfg), ["/mnt/HDD/OneDrive/Obsidian"]);
+});
+
+test("parseObsidianVaults: multiple vaults, deduplicated", () => {
+  const cfg = JSON.stringify({ vaults: { a: { path: "/x" }, b: { path: "/y" }, c: { path: "/x" } } });
+  assert.deepEqual(M.parseObsidianVaults(cfg).sort(), ["/x", "/y"]);
+});
+
+test("parseObsidianVaults: tolerates missing, malformed and empty config", () => {
+  assert.deepEqual(M.parseObsidianVaults("{not json"), []);
+  assert.deepEqual(M.parseObsidianVaults("{}"), []);
+  assert.deepEqual(M.parseObsidianVaults(JSON.stringify({ vaults: {} })), []);
+  assert.deepEqual(M.parseObsidianVaults(JSON.stringify({ vaults: { a: {} } })), []);
+  assert.deepEqual(M.parseObsidianVaults("null"), []);
+});
+
+test("rankDiscoveredDirs: newest document wins, one row per directory", () => {
+  const out = [
+    "1788330000.0 /home/u/notes",
+    "1788339999.5 /home/u/writing",
+    "1788331000.0 /home/u/notes",
+  ].join("\n");
+  const ranked = M.rankDiscoveredDirs(out, 3);
+  assert.equal(ranked.length, 2, "directories are collapsed");
+  assert.equal(ranked[0].path, "/home/u/writing", "most recently edited first");
+  assert.equal(ranked[1].path, "/home/u/notes");
+});
+
+test("rankDiscoveredDirs: respects the limit and ignores junk lines", () => {
+  const out = ["1 /a", "2 /b", "3 /c", "garbage", "", "notanumber /d"].join("\n");
+  const ranked = M.rankDiscoveredDirs(out, 2);
+  assert.equal(ranked.length, 2);
+  assert.deepEqual(ranked.map(r => r.path), ["/c", "/b"]);
+});
+
+test("rankDiscoveredDirs: handles directories containing spaces", () => {
+  const ranked = M.rankDiscoveredDirs("1788330000.0 /home/u/My Writing Folder", 3);
+  assert.equal(ranked[0].path, "/home/u/My Writing Folder");
+});
+
+test("rankDiscoveredDirs: empty input", () => {
+  assert.deepEqual(M.rankDiscoveredDirs("", 3), []);
+  assert.deepEqual(M.rankDiscoveredDirs(null, 3), []);
+});

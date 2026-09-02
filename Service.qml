@@ -88,6 +88,7 @@ Item {
         if (writingAppFocused) {
             graceTimer.stop();
             lastWritingFocusAt = Date.now();
+            maybeAutoDiscover();
         } else if (lastWritingFocusAt > 0 && graceMs > 0) {
             graceTimer.restart();
         }
@@ -361,7 +362,12 @@ Item {
         var dirs = watchDirs();
         if (dirs.length === 0) return;
 
-        var seconds = Math.ceil(probeLookbackMs / 1000);
+        // Absolute epoch cutoff, not a relative string. `find` here may be GNU
+        // findutils or bfs (Omarchy ships bfs), and bfs rejects relative forms
+        // like "-3 seconds" outright -- it accepts only ISO 8601 or @epoch.
+        // "@<epoch>" is understood by both, and computing the cutoff here also
+        // removes any ambiguity about which process's clock "now" means.
+        var cutoff = Math.floor((Date.now() - probeLookbackMs) / 1000);
         var cmd = ["find"];
         for (var i = 0; i < dirs.length; i++) cmd.push(dirs[i]);
         cmd.push("-type");
@@ -369,7 +375,7 @@ Item {
         var ext = extensionArgs();
         for (var j = 0; j < ext.length; j++) cmd.push(ext[j]);
         cmd.push("-newermt");
-        cmd.push("-" + seconds + " seconds");
+        cmd.push("@" + cutoff);
         cmd.push("-print0");
 
         probeProc.command = cmd;
@@ -381,6 +387,11 @@ Item {
         stdout: StdioCollector {
             waitForEnd: true
             onStreamFinished: root.onProbeFinished(text)
+        }
+        // Silence here once hid a probe that matched nothing on every tick.
+        stderr: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: if (String(text).length > 0) console.warn("writing-critter: probe failed: " + text)
         }
     }
 
@@ -413,6 +424,10 @@ Item {
             waitForEnd: true
             onStreamFinished: root.onCountFinished(text)
         }
+        stderr: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: if (String(text).length > 0) console.warn("writing-critter: count failed: " + text)
+        }
     }
 
     function onCountFinished(text) {
@@ -436,6 +451,163 @@ Item {
         }
         pendingPaths = [];
         if (seen > 0) recomputeTotal();
+    }
+
+    // ------------------------------------------------------ path discovery
+    //
+    // The critter cannot wake without a watch path, and making someone type one
+    // is the difference between a plugin that works on install and one that
+    // looks broken. So it works the path out itself the moment a writing app is
+    // focused with nothing configured.
+
+    property bool discovering: false
+    property string discoveryNote: ""
+    property bool discoveryWasAutomatic: false
+    property real lastDiscoveryAt: 0
+
+    function addWatchPaths(paths) {
+        if (isOverridden("watch")) return 0;
+        var list = [];
+        var i;
+        for (i = 0; i < watchEntries.length; i++) {
+            list.push({
+                path: String(watchEntries[i].path),
+                recursive: watchEntries[i].recursive !== false,
+                extensions: watchEntries[i].extensions || [".md", ".txt"]
+            });
+        }
+        var added = 0;
+        for (i = 0; i < paths.length; i++) {
+            var candidate = String(paths[i]);
+            var seen = false;
+            for (var j = 0; j < list.length; j++) {
+                if (list[j].path === candidate) seen = true;
+            }
+            if (seen) continue;
+            list.push({ path: candidate, recursive: true, extensions: [".md", ".txt"] });
+            added++;
+        }
+        if (added > 0) {
+            var next = {};
+            var stored = stateSettings();
+            for (var k in stored) {
+                if (Object.prototype.hasOwnProperty.call(stored, k)) next[k] = stored[k];
+            }
+            next["watch"] = list;
+            writeSettings(next);
+        }
+        return added;
+    }
+
+    function removeWatchPathAt(index) {
+        if (isOverridden("watch")) return;
+        var list = [];
+        for (var i = 0; i < watchEntries.length; i++) {
+            if (i === index) continue;
+            list.push({
+                path: String(watchEntries[i].path),
+                recursive: watchEntries[i].recursive !== false,
+                extensions: watchEntries[i].extensions || [".md", ".txt"]
+            });
+        }
+        var next = {};
+        var stored = stateSettings();
+        for (var k in stored) {
+            if (Object.prototype.hasOwnProperty.call(stored, k)) next[k] = stored[k];
+        }
+        next["watch"] = list;
+        writeSettings(next);
+    }
+
+    // Automatic runs are rate-limited and only fire with nothing configured, so
+    // a user who deliberately removed every path is not fought with.
+    function maybeAutoDiscover() {
+        if (isOverridden("watch")) return;
+        if (watchEntries.length > 0) return;
+        if (discovering) return;
+        if (Date.now() - lastDiscoveryAt < 300000) return;
+        discover(true);
+    }
+
+    function discover(automatic) {
+        if (discovering) return;
+        discovering = true;
+        discoveryWasAutomatic = automatic === true;
+        lastDiscoveryAt = Date.now();
+        discoveryNote = "Looking for where you write...";
+        obsidianConfig.reload();
+    }
+
+    // Signal 1: an editor that already records where its documents live.
+    FileView {
+        id: obsidianConfig
+        path: root.home + "/.config/obsidian/obsidian.json"
+        watchChanges: false
+        printErrors: false
+        onLoaded: root.onObsidianConfig(text())
+        onLoadFailed: root.onObsidianConfig("")
+    }
+
+    function onObsidianConfig(text) {
+        if (!discovering) return;
+        var vaults = Model.parseObsidianVaults(text);
+        if (vaults.length > 0) {
+            var added = addWatchPaths(vaults);
+            finishDiscovery(added, added > 0 ? "Found your Obsidian vault." : "Obsidian vault already watched.");
+            return;
+        }
+        runDiscoveryScan();
+    }
+
+    // Signal 2: whichever directory holds the most recently edited document.
+    function runDiscoveryScan() {
+        var cutoff = Math.floor(Date.now() / 1000) - 2592000; // 30 days
+        var cmd = ["find", home, "-maxdepth", "6",
+                   "(", "-name", ".*",
+                   "-o", "-name", "node_modules",
+                   "-o", "-name", "Cache",
+                   "-o", "-name", "cache",
+                   "-o", "-name", "Trash", ")", "-prune",
+                   "-o", "-type", "f",
+                   "(", "-name", "*.md", "-o", "-name", "*.txt", ")",
+                   "-newermt", "@" + cutoff,
+                   "-printf", "%T@ %h\n"];
+        discoverProc.command = cmd;
+        discoverProc.running = true;
+    }
+
+    Process {
+        id: discoverProc
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: root.onDiscoveryFinished(text)
+        }
+        stderr: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: if (String(text).length > 0) console.warn("writing-critter: discovery failed: " + text)
+        }
+    }
+
+    property var discoveredDirs: []
+
+    function onDiscoveryFinished(text) {
+        var ranked = Model.rankDiscoveredDirs(text, 3);
+        discoveredDirs = ranked;
+        if (ranked.length === 0) {
+            finishDiscovery(0, "Could not find any documents — add a path yourself.");
+            return;
+        }
+        // Automatic discovery commits only the single best candidate; a manual
+        // run is an explicit request, so it offers the runners-up too.
+        var paths = [ranked[0].path];
+        var added = addWatchPaths(paths);
+        finishDiscovery(added, added > 0 ? "Now watching " + ranked[0].path : "Already watching " + ranked[0].path);
+    }
+
+    function finishDiscovery(added, note) {
+        discovering = false;
+        discoveryNote = note;
+        if (added > 0) recomputeTotal();
     }
 
     // -------------------------------------------------- companion sources

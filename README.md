@@ -126,8 +126,9 @@ those*. Idle ticks read nothing at all.
 
 ```
              300 notes    2000 notes
-full recount    9 ms         39 ms     <- what we don't do
-metadata probe  2 ms          3 ms     <- what we do
+full recount     8 ms         38 ms     <- what we don't do
+metadata probe   3 ms          3 ms     <- what we do (idle tick)
+probe + 1 file   4 ms          5 ms     <- after you save
 ```
 
 Cost is flat regardless of how big your collection gets, because it is

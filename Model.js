@@ -371,6 +371,61 @@ function panelArt(setId, stage, mood) {
   return out;
 }
 
+// -------------------------------------------------------- path discovery
+//
+// Typing a path is the one thing standing between install and a working
+// critter, so the plugin tries to work it out itself. Two signals, best first:
+//
+//   1. An editor that records where its documents live. Obsidian keeps its
+//      vault paths in its own config; that is exact and costs one file read.
+//   2. Otherwise, the directory holding the most recently edited document.
+//
+// Note that asking the focused window is NOT an option: Wayland exposes no pid
+// for a toplevel, and editors do not hold their documents open anyway -- they
+// open, read and close -- so /proc yields nothing.
+
+function parseObsidianVaults(text) {
+  var raw;
+  try {
+    raw = JSON.parse(String(text));
+  } catch (e) {
+    return [];
+  }
+  if (!raw || typeof raw !== "object" || !raw.vaults || typeof raw.vaults !== "object") return [];
+  var out = [];
+  for (var key in raw.vaults) {
+    if (!Object.prototype.hasOwnProperty.call(raw.vaults, key)) continue;
+    var vault = raw.vaults[key];
+    if (vault && typeof vault.path === "string" && vault.path.length > 0 && out.indexOf(vault.path) === -1)
+      out.push(vault.path);
+  }
+  return out;
+}
+
+// Input is `find -printf "%T@ %h\n"` output: one line per document, epoch
+// mtime then its parent directory. Rank directories by their most recent file.
+function rankDiscoveredDirs(text, limit) {
+  var best = {};
+  var lines = String(text || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (line.length === 0) continue;
+    var space = line.indexOf(" ");
+    if (space <= 0) continue;
+    var mtime = parseFloat(line.slice(0, space));
+    var dir = line.slice(space + 1);
+    if (!isFinite(mtime) || dir.length === 0) continue;
+    if (!(dir in best) || mtime > best[dir]) best[dir] = mtime;
+  }
+  var dirs = [];
+  for (var d in best) {
+    if (Object.prototype.hasOwnProperty.call(best, d)) dirs.push({ path: d, mtime: best[d] });
+  }
+  dirs.sort(function (a, b) { return b.mtime - a.mtime; });
+  var max = isFinite(limit) && limit > 0 ? limit : 3;
+  return dirs.slice(0, max);
+}
+
 // ---------------------------------------------------------- source protocol
 //
 // Drop-box files are written by other software and are treated as untrusted
@@ -500,6 +555,8 @@ if (typeof module !== "undefined" && module.exports) {
     parseSource: parseSource,
     mergeSource: mergeSource,
     sourceIsActive: sourceIsActive,
-    pathIsClaimed: pathIsClaimed
+    pathIsClaimed: pathIsClaimed,
+    parseObsidianVaults: parseObsidianVaults,
+    rankDiscoveredDirs: rankDiscoveredDirs
   };
 }

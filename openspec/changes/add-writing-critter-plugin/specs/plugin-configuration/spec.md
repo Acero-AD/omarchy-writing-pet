@@ -64,3 +64,30 @@ The plugin SHALL offer a control to pause counting for the remainder of the day 
 #### Scenario: Pausing
 - **WHEN** the user pauses counting
 - **THEN** the poll timer stops, the critter sleeps, and word changes are not counted until resumed or the day rolls over
+
+### Requirement: Watched paths can be discovered automatically
+The plugin SHALL attempt to determine where the user writes without being told. When a whitelisted writing app is focused and no watch path is configured, it SHALL run discovery automatically, preferring an editor's own record of its document locations over a filesystem scan, and SHALL add the best candidate. Automatic discovery MUST be rate-limited, MUST NOT run when a watch path is already configured, and MUST NOT run when `watch` is pinned in `shell.json`. A manual control SHALL trigger the same discovery on demand.
+
+#### Scenario: Zero-configuration first use
+- **WHEN** a user installs the plugin and focuses their editor with nothing configured
+- **THEN** discovery runs, a watch path is added, and counting begins without the user typing a path
+
+#### Scenario: An editor that records its own document locations is preferred
+- **WHEN** the user has an Obsidian vault configured
+- **THEN** that vault path is used directly rather than scanning the filesystem
+
+#### Scenario: Falling back to a scan
+- **WHEN** no editor configuration is available
+- **THEN** the directory holding the most recently edited document is added
+
+#### Scenario: A deliberate empty list is respected
+- **WHEN** the user removes every watch path and re-focuses a writing app within the rate-limit window
+- **THEN** discovery does not immediately re-add a path
+
+#### Scenario: Discovery never overrides pinned configuration
+- **WHEN** `watch` is pinned in `shell.json`
+- **THEN** discovery adds nothing and the add and remove controls are hidden
+
+#### Scenario: Discovery reports what it did
+- **WHEN** discovery completes
+- **THEN** the panel states which path was added, or that nothing was found and a path should be added manually

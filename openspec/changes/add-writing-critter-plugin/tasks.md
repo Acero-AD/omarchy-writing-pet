@@ -88,3 +88,15 @@
 - [x] 9.4 Confirm the documented state path against the shipped Quickshell and record the literal path in the README for companion authors
 - [x] 9.5 Validate the manifest against the published marketplace schema and re-run `omarchy plugin validate` and `qmllint`
 - [ ] 9.6 Tag v1.0.0, submit to the marketplace under Productivity, and request verification
+
+## 10. Automatic path discovery (added during implementation)
+
+- [x] 10.1 Fix the panel key catcher blocking so an inline text field can receive keystrokes
+- [x] 10.2 Fix the probe's `-newermt` argument to an absolute `@epoch` cutoff, portable across GNU findutils and bfs
+- [x] 10.3 Collect and log stderr from every subprocess so a failing probe cannot be silent
+- [x] 10.4 Re-benchmark the probe asserting on rows returned, and correct the numbers in spec, design and README
+- [x] 10.5 Implement `parseObsidianVaults` and `rankDiscoveredDirs` in Model.js with unit tests
+- [x] 10.6 Move watch-list mutation into the service as the single source of truth
+- [x] 10.7 Run discovery automatically when a writing app is focused with no path configured, rate-limited and never over a shell.json override
+- [x] 10.8 Add the manual "Find where I write" control and surface the discovery result in the panel
+- [ ] 10.9 Verify discovery end to end on a live session: Obsidian vault detected, scan fallback, and rate limiting

@@ -72,6 +72,11 @@ Panel {
         PanelKeyCatcher {
             id: keyCatcher
             anchors.fill: parent
+            // Keys.priority is BeforeItem here, so without this every keystroke
+            // is swallowed by the panel's own navigation -- "j" moves a cursor,
+            // Enter toggles pause -- and an inline text field can never be
+            // typed into. Documented in PanelKeyCatcher.qml; missed first time.
+            blocked: watchInput.activeFocus
             onCloseRequested: root.close()
             onTabRequested: function (direction) {
                 root.switchPanel(direction);
@@ -447,7 +452,7 @@ Panel {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.removeWatchPath(parent.parent.index)
+                                    onClicked: if (root.service) root.service.removeWatchPathAt(parent.parent.index)
                                 }
                             }
                         }
@@ -456,7 +461,7 @@ Panel {
                     Text {
                         width: parent.width
                         visible: !root.service || root.service.watchEntries.length === 0
-                        text: "No paths yet — the critter cannot wake until you add one."
+                        text: "No paths yet. Focus a writing app and the critter will try to find where you write on its own."
                         color: root.barForeground
                         opacity: 0.6
                         font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -472,9 +477,43 @@ Panel {
                         font.family: "monospace"
                         font.pixelSize: Style.font.bodySmall
                         onAccepted: {
-                            root.addWatchPath(text);
+                            if (root.service && text.length > 0) root.service.addWatchPaths([text]);
                             text = "";
                         }
+                    }
+
+                    Rectangle {
+                        width: content.width
+                        height: Style.space(32)
+                        radius: Style.cornerRadius
+                        visible: !root.watchLocked
+                        color: root.service && root.service.discovering
+                            ? Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.12)
+                            : Color.accent
+                        Text {
+                            anchors.centerIn: parent
+                            text: root.service && root.service.discovering ? "Looking..." : "Find where I write"
+                            color: root.service && root.service.discovering ? root.barForeground : Color.background
+                            font.bold: true
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            enabled: root.service && !root.service.discovering
+                            onClicked: if (root.service) root.service.discover(false)
+                        }
+                    }
+
+                    Text {
+                        width: parent.width
+                        visible: root.service && root.service.discoveryNote.length > 0
+                        text: root.service ? root.service.discoveryNote : ""
+                        color: root.barForeground
+                        opacity: 0.7
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
                     }
 
                     Text {
@@ -608,34 +647,6 @@ Panel {
     }
 
     readonly property bool watchLocked: service ? service.isOverridden("watch") : false
-
-    function watchList() {
-        var out = [];
-        if (!service) return out;
-        for (var i = 0; i < service.watchEntries.length; i++) {
-            var e = service.watchEntries[i];
-            out.push({ path: String(e.path), recursive: e.recursive !== false, extensions: e.extensions || [".md", ".txt"] });
-        }
-        return out;
-    }
-
-    function addWatchPath(raw) {
-        var path = String(raw || "").replace(/^\s+|\s+$/g, "");
-        if (path.length === 0) return;
-        var list = watchList();
-        for (var i = 0; i < list.length; i++) {
-            if (list[i].path === path) return; // already watched
-        }
-        list.push({ path: path, recursive: true, extensions: [".md", ".txt"] });
-        setSetting("watch", list);
-    }
-
-    function removeWatchPath(index) {
-        var list = watchList();
-        if (index < 0 || index >= list.length) return;
-        list.splice(index, 1);
-        setSetting("watch", list);
-    }
 
     readonly property string sourcesText: {
         if (!service) return "";
