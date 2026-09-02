@@ -325,6 +325,8 @@ Item {
     // a shell restart -- there is no transition, so nothing would ever start.
     // This seeds the state that the signal handler would otherwise have set.
     function syncFocusState() {
+        console.log("writing-critter: focus=" + activeApp + " writingApp=" + writingAppFocused
+                    + " stateLoaded=" + stateLoaded + " watchPaths=" + watchEntries.length);
         if (writingAppFocused) {
             graceTimer.stop();
             if (lastWritingFocusAt === 0) lastWritingFocusAt = Date.now();
@@ -563,6 +565,11 @@ Item {
     // Automatic runs are rate-limited and only fire with nothing configured, so
     // a user who deliberately removed every path is not fought with.
     function maybeAutoDiscover() {
+        // Nothing may run before the state file has loaded: settings are not
+        // known yet (so watchEntries would look empty even when configured),
+        // and writeSettings refuses to write, which would burn the rate limit
+        // on a discovery whose result could not be saved.
+        if (!stateLoaded) return;
         if (isOverridden("watch")) return;
         if (watchEntries.length > 0) return;
         if (discovering) return;
@@ -572,6 +579,7 @@ Item {
 
     function discover(automatic) {
         if (discovering) return;
+        console.log("writing-critter: discovery starting (automatic=" + (automatic === true) + ")");
         discovering = true;
         discoveryWasAutomatic = automatic === true;
         lastDiscoveryAt = Date.now();
@@ -648,7 +656,15 @@ Item {
     function finishDiscovery(added, note) {
         discovering = false;
         discoveryNote = note;
-        if (added > 0) recomputeTotal();
+        console.log("writing-critter: discovery finished, added " + added + " (" + note + ")");
+        if (added > 0) {
+            recomputeTotal();
+        } else {
+            // Nothing was committed, so this attempt should not count against
+            // the rate limit -- otherwise one failed run blocks retries for
+            // five minutes and the critter looks permanently broken.
+            lastDiscoveryAt = 0;
+        }
     }
 
     // -------------------------------------------------- companion sources
