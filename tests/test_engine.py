@@ -360,3 +360,92 @@ class TestGate(TempConfig):
         if e.refresh_gate(now=1000):
             e.cycle()
         self.assertEqual(calls, [], "a closed gate must spawn no work at all")
+
+
+class TestRolloverAndResilience(TempConfig):
+    def _engine(self, **over):
+        values = {"watch": ["/tmp"], "goal": 100}
+        values.update(over)
+        self.write(json.dumps(values))
+        e = engine.Engine(engine.Config.load(self.path), engine.Log(enabled=False))
+        e.state_path = Path(self.dir.name) / "state.json"
+        return e
+
+    def test_rollover_archives_the_day_and_zeroes_today(self):
+        e = self._engine()
+        e.today = "2026-09-01"
+        e.tracker.seed("/a.md", 1000)
+        e.tracker.observe("/a.md", 1500)
+        e.words = e.tracker.total()
+        self.assertTrue(e.check_rollover("2026-09-02"))
+        self.assertEqual(e.today, "2026-09-02")
+        self.assertEqual(e.words, 0)
+        self.assertEqual(e.history[-1], {"date": "2026-09-01", "words": 500, "goal": 100})
+
+    def test_rollover_carries_baselines_so_nothing_is_recounted(self):
+        e = self._engine()
+        e.today = "2026-09-01"
+        e.tracker.seed("/a.md", 1000)
+        e.tracker.observe("/a.md", 1500)
+        e.words = e.tracker.total()
+        e.check_rollover("2026-09-02")
+        self.assertEqual(e.tracker.total(), 0, "yesterday's words must not carry into today")
+        e.tracker.observe("/a.md", 1600)
+        self.assertEqual(e.tracker.total(), 100)
+
+    def test_rollover_across_several_days_of_suspend(self):
+        e = self._engine()
+        e.today = "2026-09-01"
+        e.tracker.seed("/a.md", 5000)
+        self.assertTrue(e.check_rollover("2026-09-05"))
+        self.assertEqual(e.tracker.total(), 0)
+
+    def test_same_day_is_not_a_rollover(self):
+        e = self._engine()
+        e.today = "2026-09-02"
+        self.assertFalse(e.check_rollover("2026-09-02"))
+
+    def test_history_is_capped(self):
+        e = self._engine()
+        for i in range(engine.HISTORY_MAX + 25):
+            e.today = f"d{i}"
+            e.check_rollover(f"d{i + 1}")
+        self.assertEqual(len(e.history), engine.HISTORY_MAX)
+
+    def test_state_round_trips_through_disk(self):
+        e = self._engine()
+        e.tracker.seed("/a.md", 100)
+        e.tracker.observe("/a.md", 350)
+        e.words = e.tracker.total()
+        e.write_state()
+
+        again = self._engine()
+        again.load_state(e.state_path)
+        self.assertEqual(again.words, 250)
+        again.tracker.observe("/a.md", 400)
+        self.assertEqual(again.tracker.total(), 300, "restart must not re-count restored words")
+
+    def test_a_missing_watch_path_does_not_crash_the_cycle(self):
+        e = self._engine(watch=["/nonexistent/definitely/not/here"])
+        e.cycle()  # must not raise
+        self.assertEqual(e.words, 0)
+
+    def test_an_unreadable_state_file_falls_back_to_a_fresh_day(self):
+        e = self._engine()
+        e.state_path.write_text("{ truncated")
+        e.load_state(e.state_path)
+        self.assertEqual(e.words, 0)
+        self.assertEqual(e.today, engine.local_date())
+
+    def test_written_state_matches_the_documented_contract(self):
+        e = self._engine()
+        e.tracker.seed("/a.md", 0)
+        e.tracker.observe("/a.md", 42)
+        e.words = e.tracker.total()
+        e.write_state()
+        payload = json.loads(e.state_path.read_text())
+        for field in ("schema", "date", "goal", "wordsToday", "byOrigin",
+                      "history", "mascot", "gateOpen", "updatedAt", "tracking"):
+            self.assertIn(field, payload, f"docs/STATE-FILE.md promises '{field}'")
+        self.assertEqual(payload["schema"], 1)
+        self.assertEqual(payload["wordsToday"], 42)

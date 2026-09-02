@@ -17,7 +17,8 @@ FORBIDDEN=(
   'sudo' 'pkexec' 'polkit'
 )
 
-mapfile -t FILES < <(find . -path ./.git -prune -o \( -name '*.qml' -o -name '*.js' -o -name '*.mjs' \) -print)
+mapfile -t FILES < <(find . -path ./.git -prune -o \( -name '*.qml' -o -name '*.js' -o -name '*.mjs' -o -name '*.py' \) -print)
+FILES+=(bin/writing-critter)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "security-guard: no source files found" >&2
@@ -34,7 +35,7 @@ for pattern in "${FORBIDDEN[@]}"; do
 done
 
 # The external-command allowlist. Anything else requires a spec revision.
-ALLOWED_COMMANDS='find|wc|mkdir|notify-send'
+ALLOWED_COMMANDS='find|wc|mkdir|notify-send|hyprctl'
 if hits=$(grep -Eon 'command: \[[^]]*\]' "${FILES[@]}" 2>/dev/null); then
   while IFS= read -r line; do
     cmd=$(sed -E 's/.*command: \["([^"]+)".*/\1/' <<<"$line")

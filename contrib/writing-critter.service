@@ -1,0 +1,21 @@
+[Unit]
+Description=Writing Critter counting engine
+Documentation=https://github.com/Acero-AD/omarchy-writing-pet
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/writing-critter run
+Restart=on-failure
+RestartSec=5
+# The engine reads the documents you configure and writes its own state file.
+# Nothing else, so it needs nothing else.
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=graphical-session.target

@@ -30,16 +30,16 @@
 - [x] 4.1 Define and document the state file schema, including the last-update timestamp and the gate-open flag
 - [x] 4.2 Write atomically via temporary file and rename
 - [x] 4.3 Persist and restore across engine restarts without re-counting historical words
-- [ ] 4.4 Document the file's location and the freshness window in a contract document for front-end authors
+- [x] 4.4 Document the file's location and the freshness window in a contract document for front-end authors
 - [x] 4.5 Add `config` subcommands to add and remove watch paths and whitelist entries
 
 ## 5. Phase 1 — packaging and verification
 
-- [ ] 5.1 Add a systemd user unit with restart-on-failure, and an install command that enables it
-- [ ] 5.2 Extend the CI security guard to cover the engine: no input capture, no network, no privilege escalation, and the external-command allowlist
+- [x] 5.1 Add a systemd user unit with restart-on-failure, and an install command that enables it
+- [x] 5.2 Extend the CI security guard to cover the engine: no input capture, no network, no privilege escalation, and the external-command allowlist
 - [ ] 5.3 **Verification gate: run the engine in a terminal and confirm it counts real writing in a real editor** — words appear within a few seconds of saving, a browser and a terminal never increment, and no subprocess spawns while the gate is closed
-- [ ] 5.4 Verify rollover, engine restart, a malformed config, and a missing watch path all behave as specified
-- [ ] 5.5 Verify cost stays flat on a 2000-document collection, asserting on rows returned and not on elapsed time alone
+- [x] 5.4 Verify rollover, engine restart, a malformed config, and a missing watch path all behave as specified
+- [x] 5.5 Verify cost stays flat on a 2000-document collection, asserting on rows returned and not on elapsed time alone
 
 ## 6. Phase 2 — widget, gated on the crash diagnosis
 

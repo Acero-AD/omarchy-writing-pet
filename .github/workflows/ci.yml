@@ -26,6 +26,13 @@ jobs:
       - name: Security guard (no input capture, network, or privilege escalation)
         run: ./scripts/security-guard.sh
 
+      - name: Engine compiles and its CLI is self-describing
+        run: |
+          python3 -m py_compile bin/writing-critter
+          ./bin/writing-critter --help > /dev/null
+          ./bin/writing-critter config show > /dev/null
+          echo "engine ok"
+
       - name: QML lifecycle rules (see docs/POSTMORTEM-ORPHANED-READ.md)
         run: ./scripts/qml-lifecycle-lint.py
 

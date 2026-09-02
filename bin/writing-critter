@@ -265,28 +265,29 @@ def scan(paths: list[Path], extensions: list[str], cutoff: float, log: Log) -> l
     """
     suffixes = tuple(extensions)
     changed: list[Path] = []
-    for root in paths:
+
+    # os.scandir over os.walk + Path(): DirEntry carries stat data from the
+    # directory read, and building a Path per candidate cost more than the scan
+    # itself. This loop runs every couple of seconds forever, so it is worth it.
+    def descend(directory: str) -> None:
         try:
-            for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error(log)):
-                dirnames[:] = [d for d in dirnames if not d.startswith(".") and d != "node_modules"]
-                for name in filenames:
-                    if not name.endswith(suffixes):
-                        continue
-                    candidate = Path(dirpath) / name
-                    try:
-                        if candidate.stat().st_mtime > cutoff:
-                            changed.append(candidate)
-                    except OSError as exc:
-                        log("scan.stat_failed", path=candidate, error=exc)
+            entries = list(os.scandir(directory))
         except OSError as exc:
-            log("scan.failed", path=root, error=exc)
+            log("scan.failed", path=directory, error=exc)
+            return
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if not entry.name.startswith(".") and entry.name != "node_modules":
+                        descend(entry.path)
+                elif entry.name.endswith(suffixes) and entry.stat().st_mtime > cutoff:
+                    changed.append(Path(entry.path))
+            except OSError as exc:
+                log("scan.stat_failed", path=entry.path, error=exc)
+
+    for root in paths:
+        descend(str(root))
     return changed
-
-
-def _walk_error(log: Log):
-    def handler(exc: OSError) -> None:
-        log("scan.walk_failed", path=getattr(exc, "filename", "?"), error=exc)
-    return handler
 
 
 # ----------------------------------------------------------------- focus
