@@ -1,0 +1,5 @@
+node_modules/
+*.log
+
+# Local, machine-specific Claude Code settings
+.claude/settings.local.json
