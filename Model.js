@@ -371,6 +371,76 @@ function panelArt(setId, stage, mood) {
   return out;
 }
 
+// ---------------------------------------------------------- source protocol
+//
+// Drop-box files are written by other software and are treated as untrusted
+// input: every field is range- and type-checked, nothing is evaluated, and a
+// malformed file is ignored rather than allowed to take the plugin down.
+
+var SOURCE_PROTOCOL = 1;
+var SOURCE_WORDS_MAX = 1000000;
+var SOURCE_STALE_AFTER_MS = 600000; // 10 minutes
+
+function parseSource(text) {
+  var raw;
+  try {
+    raw = JSON.parse(String(text));
+  } catch (e) {
+    return null; // truncated or malformed: ignore, retry on next change
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (Number(raw.protocol) !== SOURCE_PROTOCOL) return null;
+
+  var sourceId = typeof raw.sourceId === "string" ? raw.sourceId : "";
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(sourceId)) return null;
+
+  var words = Number(raw.wordsAddedToday);
+  if (!isFinite(words) || words < 0 || words > SOURCE_WORDS_MAX) return null;
+  words = Math.round(words);
+
+  var date = typeof raw.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : "";
+  if (!date) return null;
+
+  var updatedAt = Date.parse(raw.updatedAt);
+  if (!isFinite(updatedAt)) updatedAt = 0;
+
+  var claims = [];
+  if (Array.isArray(raw.claimsPaths)) {
+    for (var i = 0; i < raw.claimsPaths.length; i++) {
+      var c = raw.claimsPaths[i];
+      if (typeof c === "string" && c.length > 0 && c.length < 4096) claims.push(c);
+    }
+  }
+
+  return { sourceId: sourceId, words: words, date: date, updatedAt: updatedAt, claims: claims };
+}
+
+// Absolute daily totals, reduced with max. That is what makes the protocol
+// crash-safe: a re-read, a partial write, or a source restarting at a lower
+// number can never inflate or double-count the day.
+function mergeSource(previousWords, reported) {
+  var prev = Number(previousWords);
+  if (!isFinite(prev) || prev < 0) prev = 0;
+  return Math.max(prev, reported);
+}
+
+function sourceIsActive(updatedAt, now, staleAfterMs) {
+  var limit = isFinite(staleAfterMs) ? staleAfterMs : SOURCE_STALE_AFTER_MS;
+  return updatedAt > 0 && (now - updatedAt) < limit;
+}
+
+// A path is claimed if it sits at or beneath a claimed directory. Compared on
+// segment boundaries so "/vault2" is not swallowed by a claim on "/vault".
+function pathIsClaimed(path, claims) {
+  for (var i = 0; i < claims.length; i++) {
+    var claim = claims[i];
+    if (claim.charAt(claim.length - 1) === "/") claim = claim.slice(0, claim.length - 1);
+    if (path === claim) return true;
+    if (path.indexOf(claim + "/") === 0) return true;
+  }
+  return false;
+}
+
 // ------------------------------------------------------------ status phrase
 //
 // Short, warm, never guilt-tripping. The critter is a companion, not a coach.
@@ -423,6 +493,13 @@ if (typeof module !== "undefined" && module.exports) {
     mascotIds: mascotIds,
     barFace: barFace,
     panelArt: panelArt,
-    statusPhrase: statusPhrase
+    statusPhrase: statusPhrase,
+    SOURCE_PROTOCOL: SOURCE_PROTOCOL,
+    SOURCE_WORDS_MAX: SOURCE_WORDS_MAX,
+    SOURCE_STALE_AFTER_MS: SOURCE_STALE_AFTER_MS,
+    parseSource: parseSource,
+    mergeSource: mergeSource,
+    sourceIsActive: sourceIsActive,
+    pathIsClaimed: pathIsClaimed
   };
 }

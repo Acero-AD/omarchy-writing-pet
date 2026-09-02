@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # No dependencies to install: Model.js is plain JS and the tests use the
+      # built-in node:test runner.
+      - name: Unit tests (includes the mascot grid invariant)
+        run: node --test tests/
+
+      - name: Security guard (no input capture, network, or privilege escalation)
+        run: ./scripts/security-guard.sh
+
+      - name: Manifest is valid JSON
+        run: |
+          python3 -c "import json,sys; json.load(open('manifest.json'))"
+          echo "manifest.json parses"
+
+      # Mirrors the checks in omarchy-plugin-validate that do not need a running
+      # Omarchy install, so a broken manifest fails here rather than on a user's
+      # machine.
+      - name: Manifest matches the Omarchy plugin schema
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          m = json.load(open("manifest.json"))
+          fail = []
+          if m.get("schemaVersion") != 1: fail.append("schemaVersion must be the number 1")
+          for f in ("id", "name", "version", "kinds", "entryPoints"):
+              if f not in m: fail.append(f"missing required field '{f}'")
+          pid = m.get("id", "")
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", pid): fail.append(f"invalid id '{pid}'")
+          if pid.startswith("omarchy."): fail.append("id uses the reserved omarchy.* namespace")
+          if ".." in pid: fail.append("id contains '..'")
+          if not isinstance(m.get("kinds"), list) or not m["kinds"]: fail.append("kinds must be a non-empty array")
+          eps = m.get("entryPoints", {})
+          if not isinstance(eps, dict): fail.append("entryPoints must be an object")
+          for key, path in (eps or {}).items():
+              if path.startswith("/") or ".." in path: fail.append(f"unsafe entry point '{path}'")
+              elif not os.path.isfile(path): fail.append(f"entry point not found: '{path}'")
+          required = {"bar": "bar", "bar-widget": "barWidget", "menu": "menu",
+                      "overlay": "overlay", "panel": "panel", "service": "service"}
+          for kind in m.get("kinds", []):
+              ep = required.get(kind)
+              if ep and ep not in eps: fail.append(f"kind '{kind}' requires entryPoints.{ep}")
+          section = (m.get("barWidget") or {}).get("defaultSection")
+          if section is not None and section not in ("left", "center", "right"):
+              fail.append("barWidget.defaultSection must be left, center, or right")
+          if fail:
+              print("\n".join("  - " + f for f in fail)); sys.exit(1)
+          print("manifest matches the plugin schema")
+          PY
+
+      - name: No symlinks anywhere in the plugin
+        run: |
+          found=$(find . -path ./.git -prune -o -type l -print)
+          if [ -n "$found" ]; then echo "symlinks are not allowed: $found"; exit 1; fi
+          echo "no symlinks"

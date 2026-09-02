@@ -61,17 +61,17 @@
 
 ## 7. Companion source channel
 
-- [ ] 7.1 Watch the drop-box directory and parse each `*.json` file as one source
-- [ ] 7.2 Validate every field for type and range; ignore malformed or partial files and retry on next change; never evaluate or richly render source content
-- [ ] 7.3 Implement absolute-total semantics taking the maximum per source per date, and ignore files whose date is not today
-- [ ] 7.4 Implement staleness marking that retains the reported contribution while flagging the source inactive
-- [ ] 7.5 Implement `claimsPaths` suppression of file counting for claimed paths, and baseline re-establishment when a claiming source goes stale
-- [ ] 7.6 Render the Sources section in the panel with status, contribution, and claimed paths
-- [ ] 7.7 Write `docs/COMPANION_PROTOCOL.md` covering schema, drop-box location, atomic writes, daily reset, staleness, and claims semantics
+- [x] 7.1 Watch the drop-box directory and parse each `*.json` file as one source
+- [x] 7.2 Validate every field for type and range; ignore malformed or partial files and retry on next change; never evaluate or richly render source content
+- [x] 7.3 Implement absolute-total semantics taking the maximum per source per date, and ignore files whose date is not today
+- [x] 7.4 Implement staleness marking that retains the reported contribution while flagging the source inactive
+- [x] 7.5 Implement `claimsPaths` suppression of file counting for claimed paths, and baseline re-establishment when a claiming source goes stale
+- [x] 7.6 Render the Sources section in the panel with status, contribution, and claimed paths
+- [x] 7.7 Write `docs/COMPANION_PROTOCOL.md` covering schema, drop-box location, atomic writes, daily reset, staleness, and claims semantics
 
 ## 8. Verification
 
-- [ ] 8.1 Add the CI guard grepping for `evdev`, `/dev/input`, `libinput`, `keylog`, `XGrabKey`, and network calls, failing the build on any match
+- [x] 8.1 Add the CI guard grepping for `evdev`, `/dev/input`, `libinput`, `keylog`, `XGrabKey`, and network calls, failing the build on any match
 - [ ] 8.2 Integration pass: typing in Omawrite, Obsidian and Typora increments within ~3 s; typing in a browser or terminal never increments
 - [ ] 8.3 Integration pass: confirm no subprocess spawns while a non-writing app is focused
 - [ ] 8.4 Integration pass on a 2000-document collection confirming steady-state tick cost stays flat

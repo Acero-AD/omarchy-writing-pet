@@ -210,9 +210,13 @@ Item {
         stateView.writeAdapter();
     }
 
-    // Populated by task group 7.
     function sourceStatus() {
-        return [];
+        var rows = [];
+        for (var id in sources) {
+            if (Object.prototype.hasOwnProperty.call(sources, id))
+                rows.push({ id: id, words: sources[id].words, active: sources[id].active === true });
+        }
+        return rows;
     }
 
     // ------------------------------------------------------- daily rollover
@@ -434,9 +438,146 @@ Item {
         if (seen > 0) recomputeTotal();
     }
 
-    // Overridden in task group 7 once companion sources land.
+    // -------------------------------------------------- companion sources
+    //
+    // Each *.json in the drop-box is one source. Files are enumerated with the
+    // `find` we already depend on and read one at a time through a single
+    // reusable FileView: a small state machine is easier to reason about than
+    // dynamically instantiated readers, and there are only ever a handful.
+
+    property var sources: ({})          // id -> { words, updatedAt, claims, date, active }
+    property var sourceQueue: []
+    property var activeClaims: []
+
+    Timer {
+        interval: 10000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: root.refreshSources()
+    }
+
+    // The drop-box directory itself is watched so a companion write is picked
+    // up promptly rather than waiting out the interval above.
+    FileView {
+        path: root.sourcesDir
+        watchChanges: true
+        printErrors: false
+        onFileChanged: root.refreshSources()
+    }
+
+    function refreshSources() {
+        if (sourceListProc.running || sourceReader.busy) return;
+        sourceListProc.command = ["find", sourcesDir, "-maxdepth", "1", "-type", "f", "-name", "*.json", "-print0"];
+        sourceListProc.running = true;
+    }
+
+    Process {
+        id: sourceListProc
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: root.onSourceListFinished(text)
+        }
+    }
+
+    function onSourceListFinished(text) {
+        var raw = String(text || "").split("\0");
+        var paths = [];
+        for (var i = 0; i < raw.length; i++) {
+            if (raw[i].length > 0 && raw[i].indexOf("\n") === -1) paths.push(raw[i]);
+        }
+        sourceQueue = paths;
+        pendingSources = {};
+        readNextSource();
+    }
+
+    property var pendingSources: ({})
+
+    function readNextSource() {
+        if (sourceQueue.length === 0) {
+            commitSources();
+            return;
+        }
+        var next = sourceQueue[0];
+        sourceQueue = sourceQueue.slice(1);
+        sourceReader.busy = true;
+        sourceReader.path = next;
+        sourceReader.reload();
+    }
+
+    FileView {
+        id: sourceReader
+        property bool busy: false
+        watchChanges: false
+        printErrors: false
+        blockLoading: false
+        onLoaded: {
+            root.ingestSource(text());
+            busy = false;
+            root.readNextSource();
+        }
+        onLoadFailed: {
+            busy = false;
+            root.readNextSource();
+        }
+    }
+
+    function ingestSource(text) {
+        var parsed = Model.parseSource(text);
+        if (!parsed) return;                    // malformed: ignore, retry later
+        if (parsed.date !== today) return;      // stale from a previous day
+        var existing = sources[parsed.sourceId];
+        var previous = existing ? existing.words : 0;
+        pendingSources[parsed.sourceId] = {
+            words: Model.mergeSource(previous, parsed.words),
+            updatedAt: parsed.updatedAt,
+            claims: parsed.claims,
+            date: parsed.date
+        };
+    }
+
+    function commitSources() {
+        var now = Date.now();
+        var next = {};
+        var claims = [];
+        var contributions = {};
+
+        for (var id in pendingSources) {
+            if (!Object.prototype.hasOwnProperty.call(pendingSources, id)) continue;
+            var entry = pendingSources[id];
+            entry.active = Model.sourceIsActive(entry.updatedAt, now, Model.SOURCE_STALE_AFTER_MS);
+            next[id] = entry;
+            // A stale source keeps the contribution it already reported today —
+            // closing your editor at lunch must not erase the morning.
+            contributions[id] = entry.words;
+            if (entry.active) {
+                for (var i = 0; i < entry.claims.length; i++) claims.push(entry.claims[i]);
+            }
+        }
+
+        // A path that just stopped being claimed re-enters file counting with
+        // its current word count as a fresh baseline, so edits made while the
+        // source owned it are not suddenly added to today.
+        var dropped = [];
+        for (var j = 0; j < activeClaims.length; j++) {
+            if (claims.indexOf(activeClaims[j]) === -1) dropped.push(activeClaims[j]);
+        }
+        if (dropped.length > 0) {
+            for (var path in tracking.files) {
+                if (Object.prototype.hasOwnProperty.call(tracking.files, path)
+                    && Model.pathIsClaimed(path, dropped))
+                    Model.rebaseFile(tracking, path);
+            }
+        }
+
+        sources = next;
+        activeClaims = claims;
+        sourceContributions = contributions;
+        recomputeTotal();
+    }
+
     function claimedByActiveSource(path) {
-        return false;
+        return Model.pathIsClaimed(path, activeClaims);
     }
 
     function forgetPath(path) {

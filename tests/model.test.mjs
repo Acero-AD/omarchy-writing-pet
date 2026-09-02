@@ -257,3 +257,71 @@ test("eye substitution leaves no placeholder behind", () => {
     }
   }
 });
+
+// ------------------------------------------------------- companion sources
+
+const validSource = (over = {}) => JSON.stringify({
+  protocol: 1, sourceId: "obsidian", date: "2026-09-02",
+  wordsAddedToday: 342, updatedAt: "2026-09-02T10:42:13+02:00",
+  claimsPaths: ["/home/u/Vault"], ...over
+});
+
+test("parseSource: accepts a well-formed file", () => {
+  const s = M.parseSource(validSource());
+  assert.equal(s.sourceId, "obsidian");
+  assert.equal(s.words, 342);
+  assert.deepEqual(s.claims, ["/home/u/Vault"]);
+});
+
+test("parseSource: rejects malformed and truncated JSON", () => {
+  assert.equal(M.parseSource("{not json"), null);
+  assert.equal(M.parseSource('{"protocol":1,"sourceId":"a"'), null);
+  assert.equal(M.parseSource(""), null);
+  assert.equal(M.parseSource("[]"), null);
+  assert.equal(M.parseSource("null"), null);
+});
+
+test("parseSource: rejects out-of-range and wrong-typed word counts", () => {
+  assert.equal(M.parseSource(validSource({ wordsAddedToday: -1 })), null);
+  assert.equal(M.parseSource(validSource({ wordsAddedToday: M.SOURCE_WORDS_MAX + 1 })), null);
+  assert.equal(M.parseSource(validSource({ wordsAddedToday: "many" })), null);
+});
+
+test("parseSource: rejects a wrong protocol version and bad ids", () => {
+  assert.equal(M.parseSource(validSource({ protocol: 2 })), null);
+  assert.equal(M.parseSource(validSource({ sourceId: "../../etc/passwd" })), null);
+  assert.equal(M.parseSource(validSource({ sourceId: "" })), null);
+});
+
+test("parseSource: rejects a malformed date", () => {
+  assert.equal(M.parseSource(validSource({ date: "yesterday" })), null);
+  assert.equal(M.parseSource(validSource({ date: 20260902 })), null);
+});
+
+test("parseSource: hostile strings survive only as inert data", () => {
+  const s = M.parseSource(validSource({ claimsPaths: ["<script>alert(1)</script>"] }));
+  assert.deepEqual(s.claims, ["<script>alert(1)</script>"]);
+});
+
+test("mergeSource: absolute totals reduce with max, so re-reads are idempotent", () => {
+  assert.equal(M.mergeSource(0, 342), 342);
+  assert.equal(M.mergeSource(342, 342), 342);
+  assert.equal(M.mergeSource(342, 400), 400);
+  assert.equal(M.mergeSource(400, 12), 400, "a restarted source must not lose the day");
+});
+
+test("sourceIsActive: staleness threshold", () => {
+  const now = 1_000_000_000;
+  assert.equal(M.sourceIsActive(now - 1000, now, 600000), true);
+  assert.equal(M.sourceIsActive(now - 700000, now, 600000), false);
+  assert.equal(M.sourceIsActive(0, now, 600000), false);
+});
+
+test("pathIsClaimed: matches on segment boundaries", () => {
+  assert.equal(M.pathIsClaimed("/vault/a.md", ["/vault"]), true);
+  assert.equal(M.pathIsClaimed("/vault/deep/a.md", ["/vault/"]), true);
+  assert.equal(M.pathIsClaimed("/vault", ["/vault"]), true);
+  assert.equal(M.pathIsClaimed("/vault2/a.md", ["/vault"]), false, "sibling must not be swallowed");
+  assert.equal(M.pathIsClaimed("/other/a.md", ["/vault"]), false);
+  assert.equal(M.pathIsClaimed("/a.md", []), false);
+});
