@@ -277,7 +277,24 @@ Item {
         var restored = persisted.tracking;
         tracking = (restored && restored.files) ? restored : Model.emptyTracking();
         checkRollover();
+        // Settings are only known once state has loaded, so this is the first
+        // moment discovery can tell whether a watch path exists.
+        Qt.callLater(root.syncFocusState);
     }
+
+    // `onWritingAppFocusedChanged` fires on a transition. When the plugin loads
+    // with a writing app already focused -- the normal case after an update or
+    // a shell restart -- there is no transition, so nothing would ever start.
+    // This seeds the state that the signal handler would otherwise have set.
+    function syncFocusState() {
+        if (writingAppFocused) {
+            graceTimer.stop();
+            if (lastWritingFocusAt === 0) lastWritingFocusAt = Date.now();
+            maybeAutoDiscover();
+        }
+    }
+
+    Component.onCompleted: syncFocusState()
 
     // The state directory does not exist on first run, and an atomic write
     // cannot create its own parent. One spawn at shell startup, then never
