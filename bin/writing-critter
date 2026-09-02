@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Writing Critter — counting engine.
+
+Runs OUTSIDE the desktop shell, on purpose. An earlier version did this work
+inside quickshell and segfaulted the whole desktop in a crash loop; see
+docs/POSTMORTEM-ORPHANED-READ.md. Here, a bug is a dead script.
+
+Standard library only. Readable on purpose too: this reads your documents, so
+you should be able to audit it without trusting a dependency tree.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+VERSION = "0.1.0"
+
+# ----------------------------------------------------------------- paths
+
+
+def _xdg(var: str, default: str) -> Path:
+    raw = os.environ.get(var, "").strip()
+    return Path(raw) if raw else Path.home() / default
+
+
+CONFIG_PATH = _xdg("XDG_CONFIG_HOME", ".config") / "writing-critter" / "config.json"
+STATE_PATH = _xdg("XDG_STATE_HOME", ".local/state") / "writing-critter" / "state.json"
+
+# ----------------------------------------------------------------- config
+
+DEFAULTS: dict[str, Any] = {
+    "goal": 500,
+    "watch": [],
+    "extensions": [".md", ".txt"],
+    "whitelist": [
+        "omawrite",
+        "obsidian",
+        "typora",
+        "soffice",
+        "libreoffice-writer",
+        "ghostwriter",
+        "apostrophe",
+    ],
+    "graceSeconds": 15,
+    "pollSeconds": 2,
+    "lookbackSeconds": 3,
+    "recountCap": 200,
+    "netMode": "additive",
+    "mascot": "bird",
+}
+
+POLL_MIN, POLL_MAX = 1, 30
+
+
+class ConfigError(Exception):
+    """Raised when the config file exists but cannot be used."""
+
+
+@dataclass
+class Config:
+    path: Path
+    # deepcopy, not dict(): a shallow copy aliases the list values, so appending
+    # a watch path would mutate DEFAULTS itself and leak into every later load.
+    values: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULTS))
+
+    @classmethod
+    def load(cls, path: Path = CONFIG_PATH) -> "Config":
+        cfg = cls(path=path)
+        if not path.exists():
+            return cfg
+        try:
+            raw = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            # Never rewrite a file we could not parse: the user's settings are
+            # in there, and overwriting them with defaults would be worse than
+            # refusing to start.
+            raise ConfigError(f"{path}: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}")
+        if not isinstance(raw, dict):
+            raise ConfigError(f"{path}: expected a JSON object, found {type(raw).__name__}")
+        unknown = sorted(set(raw) - set(DEFAULTS))
+        if unknown:
+            raise ConfigError(f"{path}: unknown setting(s): {', '.join(unknown)}")
+        cfg.values.update(raw)
+        cfg.validate()
+        return cfg
+
+    def validate(self) -> None:
+        v = self.values
+        if not isinstance(v["goal"], int) or v["goal"] < 1:
+            raise ConfigError(f"{self.path}: 'goal' must be a positive integer")
+        for key in ("watch", "extensions", "whitelist"):
+            if not isinstance(v[key], list) or not all(isinstance(x, str) for x in v[key]):
+                raise ConfigError(f"{self.path}: '{key}' must be a list of strings")
+        if v["netMode"] not in ("additive", "net"):
+            raise ConfigError(f"{self.path}: 'netMode' must be 'additive' or 'net'")
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(self.path, json.dumps(self.values, indent=2, sort_keys=True) + "\n")
+
+    # convenience accessors -------------------------------------------------
+    @property
+    def poll_seconds(self) -> int:
+        return max(POLL_MIN, min(POLL_MAX, int(self.values["pollSeconds"])))
+
+    @property
+    def lookback_seconds(self) -> int:
+        """Must exceed the poll interval or a save on a tick boundary is missed."""
+        want = int(self.values["lookbackSeconds"])
+        return want if want > self.poll_seconds else self.poll_seconds + 1
+
+    @property
+    def watch_paths(self) -> list[Path]:
+        return [Path(os.path.expanduser(p)) for p in self.values["watch"]]
+
+
+# ----------------------------------------------------------------- atomic io
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Write via temporary file and rename, so a reader never sees a torn file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+# ----------------------------------------------------------------- logging
+
+
+class Log:
+    """Every decision, on stdout, in order. The previous implementation was
+    undiagnosable precisely because it made decisions silently."""
+
+    def __init__(self, enabled: bool = True) -> None:
+        self.enabled = enabled
+
+    def __call__(self, event: str, **fields: Any) -> None:
+        if not self.enabled:
+            return
+        stamp = time.strftime("%H:%M:%S")
+        detail = " ".join(f"{k}={v}" for k, v in fields.items())
+        print(f"{stamp} {event}" + (f"  {detail}" if detail else ""), flush=True)
+
+
+# ----------------------------------------------------------------- engine
+
+
+class Engine:
+    def __init__(self, config: Config, log: Log) -> None:
+        self.config = config
+        self.log = log
+        self.focused_app: str = ""
+        self.gate_open: bool = False
+        self.gate_reason: str = "not started"
+
+    # Filled in by task group 2 (focus) and group 3 (counting).
+    def blocking_reason(self) -> str | None:
+        """Why counting cannot happen right now, or None if it can."""
+        if not self.config.values["watch"]:
+            return "no watch paths configured (writing-critter config add-path <dir>)"
+        if not self.config.values["whitelist"]:
+            return "no writing apps configured (writing-critter config add-app <id>)"
+        return None
+
+
+# ----------------------------------------------------------------- commands
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    config = Config.load(args.config)
+    log = Log(enabled=True)
+    engine = Engine(config, log)
+    log("engine.start", version=VERSION, config=config.path, state=STATE_PATH)
+
+    blocked = engine.blocking_reason()
+    if blocked:
+        log("engine.blocked", reason=blocked)
+        print(f"\nnot counting: {blocked}", file=sys.stderr)
+        return 1
+
+    log("engine.ready", goal=config.values["goal"], paths=len(config.watch_paths))
+    print("focus tracking and counting arrive in task groups 2 and 3", file=sys.stderr)
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    config = Config.load(args.config)
+    state = read_state()
+
+    goal = config.values["goal"]
+    words = int(state.get("wordsToday", 0)) if state else 0
+    print(f"words today   {words} / {goal}")
+    print(f"config        {config.path}")
+    print(f"state         {STATE_PATH}" + ("" if state else "  (not written yet)"))
+
+    paths = config.values["watch"]
+    print(f"watching      {', '.join(paths) if paths else '(nothing)'}")
+    print(f"writing apps  {', '.join(config.values['whitelist'])}")
+
+    if state and "updatedAt" in state:
+        age = int(time.time() - float(state["updatedAt"]))
+        fresh = "running" if age < 60 else f"stale ({age}s since last update)"
+        print(f"engine        {fresh}")
+    else:
+        print("engine        not running")
+
+    engine = Engine(config, Log(enabled=False))
+    blocked = engine.blocking_reason()
+    if blocked:
+        print(f"\nnot counting: {blocked}")
+    return 0
+
+
+def read_state() -> dict[str, Any] | None:
+    """Readers tolerate a missing or torn file; neither is an error."""
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    config = Config.load(args.config)
+
+    if args.config_action == "show":
+        print(json.dumps(config.values, indent=2, sort_keys=True))
+        return 0
+
+    if args.config_action == "path":
+        print(config.path)
+        return 0
+
+    key = {"add-path": "watch", "remove-path": "watch",
+           "add-app": "whitelist", "remove-app": "whitelist"}[args.config_action]
+    value = args.value
+    if args.config_action.startswith("add"):
+        if key == "watch":
+            value = str(Path(os.path.expanduser(value)).resolve())
+        if value in config.values[key]:
+            print(f"already present: {value}")
+            return 0
+        config.values[key].append(value)
+    else:
+        if key == "watch":
+            candidates = {value, str(Path(os.path.expanduser(value)).resolve())}
+            before = list(config.values[key])
+            config.values[key] = [p for p in before if p not in candidates]
+            if config.values[key] == before:
+                print(f"not present: {value}", file=sys.stderr)
+                return 1
+        else:
+            if value not in config.values[key]:
+                print(f"not present: {value}", file=sys.stderr)
+                return 1
+            config.values[key].remove(value)
+
+    config.validate()
+    config.save()
+    print(f"{key}: {', '.join(config.values[key]) or '(empty)'}")
+    return 0
+
+
+# ----------------------------------------------------------------- cli
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="writing-critter", description=__doc__.splitlines()[0])
+    p.add_argument("--config", type=Path, default=CONFIG_PATH, help="config file (default: %(default)s)")
+    p.add_argument("--version", action="version", version=VERSION)
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("run", help="run in the foreground, logging every decision")
+    sub.add_parser("status", help="print today's count and why counting is or is not happening")
+
+    cfg = sub.add_parser("config", help="inspect and change settings")
+    cfgsub = cfg.add_subparsers(dest="config_action", required=True)
+    cfgsub.add_parser("show", help="print the effective configuration")
+    cfgsub.add_parser("path", help="print the config file path")
+    for action, meta in (("add-path", "DIR"), ("remove-path", "DIR"),
+                         ("add-app", "APPID"), ("remove-app", "APPID")):
+        sp = cfgsub.add_parser(action, help=f"{action.replace('-', ' ')}")
+        sp.add_argument("value", metavar=meta)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    handler = {"run": cmd_run, "status": cmd_status, "config": cmd_config}[args.command]
+    try:
+        return handler(args)
+    except ConfigError as exc:
+        print(f"writing-critter: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

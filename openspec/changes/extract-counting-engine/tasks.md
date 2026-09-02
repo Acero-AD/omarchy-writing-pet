@@ -1,10 +1,10 @@
 ## 1. Phase 1 — engine skeleton and observability
 
-- [ ] 1.1 Create the engine as a single dependency-free Python 3 executable with subcommands: `run` (foreground), `status`, `config`
-- [ ] 1.2 Implement config loading from an engine-owned file with documented defaults, reporting malformed config clearly without overwriting it
-- [ ] 1.3 Implement structured logging of every decision — focus change, gate transition, probe result, words committed — to stdout in foreground mode
-- [ ] 1.4 Implement `status` printing today's count, goal, resolved watch paths, gate state, and the reason counting is blocked when it is
-- [ ] 1.5 Add a test harness runnable with no desktop and no shell
+- [x] 1.1 Create the engine as a single dependency-free Python 3 executable with subcommands: `run` (foreground), `status`, `config`
+- [x] 1.2 Implement config loading from an engine-owned file with documented defaults, reporting malformed config clearly without overwriting it
+- [x] 1.3 Implement structured logging of every decision — focus change, gate transition, probe result, words committed — to stdout in foreground mode
+- [x] 1.4 Implement `status` printing today's count, goal, resolved watch paths, gate state, and the reason counting is blocked when it is
+- [x] 1.5 Add a test harness runnable with no desktop and no shell
 
 ## 2. Phase 1 — focus tracking
 
