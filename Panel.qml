@@ -406,14 +406,75 @@ Panel {
                         font.pixelSize: Style.font.caption
                     }
 
+                    Repeater {
+                        model: root.service ? root.service.watchEntries : []
+                        delegate: Item {
+                            required property var modelData
+                            required property int index
+                            width: content.width
+                            height: Style.space(22)
+                            Text {
+                                anchors.left: parent.left
+                                anchors.right: removeHit.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: String(parent.modelData.path)
+                                color: root.barForeground
+                                opacity: 0.85
+                                font.family: "monospace"
+                                font.pixelSize: Style.font.bodySmall
+                                elide: Text.ElideMiddle
+                            }
+                            Rectangle {
+                                id: removeHit
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: Style.space(20)
+                                height: Style.space(20)
+                                radius: Style.space(4)
+                                visible: !root.watchLocked
+                                color: removeMouse.containsMouse
+                                    ? Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.16)
+                                    : "transparent"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "x"
+                                    color: root.barForeground
+                                    font.family: "monospace"
+                                    font.pixelSize: Style.font.bodySmall
+                                }
+                                MouseArea {
+                                    id: removeMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.removeWatchPath(parent.parent.index)
+                                }
+                            }
+                        }
+                    }
+
                     Text {
                         width: parent.width
-                        text: root.watchText
+                        visible: !root.service || root.service.watchEntries.length === 0
+                        text: "No paths yet — the critter cannot wake until you add one."
                         color: root.barForeground
-                        opacity: 0.8
+                        opacity: 0.6
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
+                    }
+
+                    TextField {
+                        id: watchInput
+                        width: content.width
+                        visible: !root.watchLocked
+                        placeholderText: "~/Documents/writing   (press Enter)"
                         font.family: "monospace"
                         font.pixelSize: Style.font.bodySmall
-                        wrapMode: Text.WordWrap
+                        onAccepted: {
+                            root.addWatchPath(text);
+                            text = "";
+                        }
                     }
 
                     Text {
@@ -546,13 +607,34 @@ Panel {
         return list.length ? list.join(", ") : "(none configured)";
     }
 
-    readonly property string watchText: {
-        if (!service) return "";
-        var entries = service.watchEntries;
-        if (!entries.length) return "(none — the critter cannot wake until a path is added)";
+    readonly property bool watchLocked: service ? service.isOverridden("watch") : false
+
+    function watchList() {
         var out = [];
-        for (var i = 0; i < entries.length; i++) out.push(String(entries[i].path));
-        return out.join("\n");
+        if (!service) return out;
+        for (var i = 0; i < service.watchEntries.length; i++) {
+            var e = service.watchEntries[i];
+            out.push({ path: String(e.path), recursive: e.recursive !== false, extensions: e.extensions || [".md", ".txt"] });
+        }
+        return out;
+    }
+
+    function addWatchPath(raw) {
+        var path = String(raw || "").replace(/^\s+|\s+$/g, "");
+        if (path.length === 0) return;
+        var list = watchList();
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].path === path) return; // already watched
+        }
+        list.push({ path: path, recursive: true, extensions: [".md", ".txt"] });
+        setSetting("watch", list);
+    }
+
+    function removeWatchPath(index) {
+        var list = watchList();
+        if (index < 0 || index >= list.length) return;
+        list.splice(index, 1);
+        setSetting("watch", list);
     }
 
     readonly property string sourcesText: {
