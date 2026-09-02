@@ -82,9 +82,9 @@
 
 ## 9. Release
 
-- [ ] 9.1 Write the README security-disclosure section stating what is read, what is never done, and where state lives
-- [ ] 9.2 Document scope limits: no terminal or modal editors, no binary formats in v1, CJK counting approximation, and how to discover app identifiers
+- [x] 9.1 Write the README security-disclosure section stating what is read, what is never done, and where state lives
+- [x] 9.2 Document scope limits: no terminal or modal editors, no binary formats in v1, CJK counting approximation, and how to discover app identifiers
 - [ ] 9.3 Capture `preview.png` and resolve whether it shows the bar face, the panel, or both
-- [ ] 9.4 Confirm the documented state path against the shipped Quickshell and record the literal path in the README for companion authors
-- [ ] 9.5 Validate the manifest against the published marketplace schema and re-run `omarchy plugin validate` and `qmllint`
+- [x] 9.4 Confirm the documented state path against the shipped Quickshell and record the literal path in the README for companion authors
+- [x] 9.5 Validate the manifest against the published marketplace schema and re-run `omarchy plugin validate` and `qmllint`
 - [ ] 9.6 Tag v1.0.0, submit to the marketplace under Productivity, and request verification
