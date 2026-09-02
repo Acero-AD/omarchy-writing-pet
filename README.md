@@ -26,6 +26,25 @@ progress, and a streak of the last seven days.
                         "The shell is thinning."
 ```
 
+> ## ⚠️ DO NOT INSTALL — crashes the Omarchy shell
+>
+> On a live Omarchy session this plugin **segfaults `quickshell` in a crash
+> loop**, taking the entire desktop shell down with it. Recovering required
+> removing the plugin from `shell.json` and from disk, then restarting the
+> shell.
+>
+> Do not run `omarchy plugin add` on this repository until this line is gone.
+> If you already have, remove it:
+>
+> ```bash
+> omarchy plugin remove io.github.acero-ad.writing-critter --yes
+> rm -rf ~/.config/omarchy/plugins/io.github.acero-ad.writing-critter
+> omarchy-restart-shell
+> ```
+>
+> The crash is not yet diagnosed. Everything below describes the intended
+> behaviour and remains accurate as a design document.
+
 > **Status:** implemented, not yet verified against a live Omarchy session.
 > Passes `omarchy plugin validate`, `qmllint`, 38 unit tests and the security
 > guard. Runtime behaviour in a real bar has not been exercised yet — see
@@ -182,7 +201,10 @@ most visible way this plugin can look broken.
 | | |
 |---|---|
 | Unit tests, security guard, manifest, qmllint | ✅ passing |
-| Live bar rendering, counting, rollover | ⬜ not yet exercised |
+| Live bar rendering | ✅ the critter renders in the bar |
+| Service mounting | ⚠️ the shell does not mount third-party services; the bar widget hosts it instead |
+| Counting, discovery, rollover | ⬜ never reached — see the crash above |
+| Shell stability | ❌ SIGSEGV crash loop, undiagnosed |
 | Screenshot / marketplace submission | ⬜ pending |
 
 Design rationale and the full technical spec live in
