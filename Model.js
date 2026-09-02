@@ -371,6 +371,25 @@ function panelArt(setId, stage, mood) {
   return out;
 }
 
+// ------------------------------------------------------------ status phrase
+//
+// Short, warm, never guilt-tripping. The critter is a companion, not a coach.
+var PHRASES = {
+  sleeping: "Open a writing app and it will wake.",
+  celebrating: "Goal met. Well done.",
+  idle: ["Something is stirring.", "It is waiting for you.",
+         "Halfway. It has found its feet.", "Nearly there.", "It soars."],
+  writing: ["Something is stirring.", "The shell is thinning.",
+            "It is keeping up with you.", "Wings out.", "It soars."]
+};
+
+function statusPhrase(stage, mood) {
+  if (mood === "sleeping") return PHRASES.sleeping;
+  if (mood === "celebrating") return PHRASES.celebrating;
+  var list = PHRASES[mood] || PHRASES.idle;
+  return list[clampStage(stage)];
+}
+
 // ----------------------------------------------------------------- exports
 
 if (typeof module !== "undefined" && module.exports) {
@@ -403,6 +422,7 @@ if (typeof module !== "undefined" && module.exports) {
     mascotSet: mascotSet,
     mascotIds: mascotIds,
     barFace: barFace,
-    panelArt: panelArt
+    panelArt: panelArt,
+    statusPhrase: statusPhrase
   };
 }

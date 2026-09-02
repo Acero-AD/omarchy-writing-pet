@@ -30,7 +30,7 @@ _(none — this is a greenfield project with no existing specs.)_
 ## Impact
 
 - **New repository**, public on GitHub, whose root *is* the plugin: `manifest.json`, `BarWidget.qml`, `Panel.qml`, `Service.qml`, `Model.js`, `tests/`, `README.md`, `LICENSE`, `preview.png`. No symlinks anywhere (marketplace requirement).
-- **Runtime dependencies: none.** External commands limited to `find` and `wc`, plus `notify-send` only when the user opts into goal notifications. No `hyprctl` at runtime — focus comes from `ToplevelManager` in `Quickshell.Wayland`.
+- **Runtime dependencies: none.** External commands limited to `find`, `wc`, and one startup `mkdir -p` for the plugin's own state directory, plus `notify-send` only when the user opts into goal notifications. No `hyprctl` at runtime — focus comes from `ToplevelManager` in `Quickshell.Wayland`.
 - **Host APIs consumed:** Quickshell 0.3.1 (`FileView` + `JsonAdapter` + `atomicWrites`, `Process`, `ToplevelManager`) and Omarchy shell modules `qs.Commons` (`Color`, `Style`) and `qs.Ui` (`BarWidget`, `Panel`, `KeyboardPanel`, `PanelKeyCatcher`, `WidgetButton`, `NumberField`).
 - **User-visible state:** a new directory `~/.local/state/omarchy/io.github.acero-ad.writing-critter/`. Users may add an entry to `~/.config/omarchy/shell.json`'s bar layout; the plugin never writes that file.
 - **Distribution:** public GitHub repo → Omarchy plugin marketplace submission under Productivity. Design is intended to pass automated checks without a security review flag.

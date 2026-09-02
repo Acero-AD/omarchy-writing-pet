@@ -765,7 +765,7 @@ Omarchy plugins run **unsandboxed inside the long-lived shell process with full 
 4. **No content storage.** File text is read into memory transiently for counting and discarded. State files contain only integers, dates, settings, and user-chosen paths. Logs must never include document text.
 5. **Untrusted-input handling.** Drop-box JSON is validated (types, ranges, date) and never executed or `eval`ed; watched file content is never `eval`ed or rendered as rich text.
 6. **README disclosure section** (mandatory): what it reads (user-configured document paths + its own state dir), what it never does (keyboard, network, privileges, content storage), and where state lives. Frame as "100% local — no network access, no sudo, no input devices."
-7. **External commands allowlist:** `find` and `wc` only, invoked with explicit args (or wrapped in `sh -c` since Quickshell `Process` has no shell), plus `notify-send` **only** when the user has opted into `notifyOnGoal`. `hyprctl` is no longer needed at runtime (§3.1). Anything else requires a spec revision.
+7. **External commands allowlist:** `find`, `wc`, and a single startup `mkdir -p` to create the plugin's own state directory (an atomic write cannot create its own parent), invoked with explicit args (or wrapped in `sh -c` since Quickshell `Process` has no shell), plus `notify-send` **only** when the user has opted into `notifyOnGoal`. `hyprctl` is no longer needed at runtime (§3.1). Anything else requires a spec revision.
 
 ---
 

@@ -21,42 +21,42 @@
 
 ## 3. Service.qml — focus, polling, state
 
-- [ ] 3.1 Create the service singleton with `FileView` + `JsonAdapter` + `atomicWrites` persistence of the documented state shape
-- [ ] 3.2 Implement focus tracking from `ToplevelManager.activeToplevel.appId` exposing `activeApp`, `writingAppFocused`, and `lastWritingFocusAt`
-- [ ] 3.3 Implement case-insensitive whitelist matching with `omawrite` and the common GUI editors as defaults, plus the `graceMs` window
-- [ ] 3.4 Implement the poll gate so the timer runs only when not paused, watch paths exist, and a writing app is focused or recently focused — and verify no subprocess spawns while gated off
-- [ ] 3.5 Implement the probe step: a metadata-only scan for files modified within `probeLookbackMs`, using explicit process arguments and null-delimited paths
-- [ ] 3.6 Implement the recount step reading only probe-returned files, with a per-tick cap on files recounted
-- [ ] 3.7 Wire delta attribution through the focus grace window and the additive rule; handle deleted and renamed files without disturbing the total
-- [ ] 3.8 Implement the midnight date-change check on a 30 s timer so rollover survives suspend and resume
-- [ ] 3.9 Expose `wordsToday`, `goal`, `progress`, `stage`, `mood`, `celebrating`, and the per-origin breakdown to the widgets, binding `sleeping` to the same expression as the poll gate
+- [x] 3.1 Create the service singleton with `FileView` + `JsonAdapter` + `atomicWrites` persistence of the documented state shape
+- [x] 3.2 Implement focus tracking from `ToplevelManager.activeToplevel.appId` exposing `activeApp`, `writingAppFocused`, and `lastWritingFocusAt`
+- [x] 3.3 Implement case-insensitive whitelist matching with `omawrite` and the common GUI editors as defaults, plus the `graceMs` window
+- [x] 3.4 Implement the poll gate so the timer runs only when not paused, watch paths exist, and a writing app is focused or recently focused — and verify no subprocess spawns while gated off
+- [x] 3.5 Implement the probe step: a metadata-only scan for files modified within `probeLookbackMs`, using explicit process arguments and null-delimited paths
+- [x] 3.6 Implement the recount step reading only probe-returned files, with a per-tick cap on files recounted
+- [x] 3.7 Wire delta attribution through the focus grace window and the additive rule; handle deleted and renamed files without disturbing the total
+- [x] 3.8 Implement the midnight date-change check on a 30 s timer so rollover survives suspend and resume
+- [x] 3.9 Expose `wordsToday`, `goal`, `progress`, `stage`, `mood`, `celebrating`, and the per-origin breakdown to the widgets, binding `sleeping` to the same expression as the poll gate
 
 ## 4. BarWidget.qml — the bar face
 
-- [ ] 4.1 Scaffold the widget from the focus-forge structure: `Loader`-mounted panel, `injectPanel()` wiring of `bar` / `anchorItem` / `hostWidget`, and forwarded `open()` / `close()` / `toggle()` / `closeForPopoutSwitch()` with `opened` and `popoutSwitchClosing`
-- [ ] 4.2 Render the ASCII face plus counter in a `WidgetButton`, pinning `font.family: "monospace"` on the face element and taking all colours from the theme
-- [ ] 4.3 Implement `showNumbers` and confirm the widget width is constant across every stage and mood
-- [ ] 4.4 Implement vertical-bar mode: face only, no counter, no overflow, with the numeric figure moved to the tooltip
-- [ ] 4.5 Implement the goal-crossing celebration animation, capped at 10 s, silent, with `notifyOnGoal` defaulting to off
-- [ ] 4.6 Implement the hover tooltip with today over goal, percentage, per-origin breakdown, and active sources
-- [ ] 4.7 Implement the right-click quick menu: pause counting today, reset today, open config
+- [x] 4.1 Scaffold the widget from the focus-forge structure: `Loader`-mounted panel, `injectPanel()` wiring of `bar` / `anchorItem` / `hostWidget`, and forwarded `open()` / `close()` / `toggle()` / `closeForPopoutSwitch()` with `opened` and `popoutSwitchClosing`
+- [x] 4.2 Render the ASCII face plus counter in a `WidgetButton`, pinning `font.family: "monospace"` on the face element and taking all colours from the theme
+- [x] 4.3 Implement `showNumbers` and confirm the widget width is constant across every stage and mood
+- [x] 4.4 Implement vertical-bar mode: face only, no counter, no overflow, with the numeric figure moved to the tooltip
+- [x] 4.5 Implement the goal-crossing celebration animation, capped at 10 s, silent, with `notifyOnGoal` defaulting to off
+- [x] 4.6 Implement the hover tooltip with today over goal, percentage, per-origin breakdown, and active sources
+- [x] 4.7 Implement the right-click quick menu: pause counting today, reset today, open config
 
 ## 5. Panel.qml — the critter up close
 
-- [ ] 5.1 Scaffold the panel with `manageIpc: false`, `KeyboardPanel` anchored to the bar button, `PanelKeyCatcher` for Escape and Tab routing, and fitted content sizing
-- [ ] 5.2 Render the multi-line art with pinned monospace, fixed reserved height across stages, and centre alignment
-- [ ] 5.3 Render the numeric today-over-goal figure, the derived status phrase, and the themed progress meter for `meterMode: "widget"` sets
-- [ ] 5.4 Suppress the meter for `meterMode: "art"` sets while preserving panel height
-- [ ] 5.5 Render the per-origin breakdown and the recent-days goal history
-- [ ] 5.6 Wire the Pause / Reset / Config actions and map Enter to pause-resume
+- [x] 5.1 Scaffold the panel with `manageIpc: false`, `KeyboardPanel` anchored to the bar button, `PanelKeyCatcher` for Escape and Tab routing, and fitted content sizing
+- [x] 5.2 Render the multi-line art with pinned monospace, fixed reserved height across stages, and centre alignment
+- [x] 5.3 Render the numeric today-over-goal figure, the derived status phrase, and the themed progress meter for `meterMode: "widget"` sets
+- [x] 5.4 Suppress the meter for `meterMode: "art"` sets while preserving panel height
+- [x] 5.5 Render the per-origin breakdown and the recent-days goal history
+- [x] 5.6 Wire the Pause / Reset / Config actions and map Enter to pause-resume
 
 ## 6. Configuration surface
 
-- [ ] 6.1 Implement settings resolution precedence: inline `shell.json` entry overrides the state file, which overrides defaults; the plugin never writes `shell.json`
-- [ ] 6.2 Build the config sub-view for goal, whitelist, watched paths, sources, critter, and data actions, replacing the panel body rather than opening a second window
-- [ ] 6.3 Render fields overridden by `shell.json` as disabled with a stated reason
-- [ ] 6.4 Implement detect-current-app for the whitelist and surface the currently focused identifier so mismatches are visible
-- [ ] 6.5 Implement the mascot picker previewing both the bar face and a panel frame per option
+- [x] 6.1 Implement settings resolution precedence: inline `shell.json` entry overrides the state file, which overrides defaults; the plugin never writes `shell.json`
+- [x] 6.2 Build the config sub-view for goal, whitelist, watched paths, sources, critter, and data actions, replacing the panel body rather than opening a second window
+- [x] 6.3 Render fields overridden by `shell.json` as disabled with a stated reason
+- [x] 6.4 Implement detect-current-app for the whitelist and surface the currently focused identifier so mismatches are visible
+- [x] 6.5 Implement the mascot picker previewing both the bar face and a panel frame per option
 - [ ] 6.6 Verify a fresh install with no configuration counts words written in Omawrite
 
 ## 7. Companion source channel
