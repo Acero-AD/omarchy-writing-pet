@@ -1,23 +1,23 @@
 ## 1. Repository and scaffold
 
-- [ ] 1.1 Initialise the git repository so the repo root *is* the plugin (manifest and QML entry points at top level), with no symlinks anywhere
-- [ ] 1.2 Write `manifest.json` with `schemaVersion`, `id`, `name`, `version`, `author`, `license`, `description`, `kinds: ["bar-widget","service"]`, `entryPoints` for `barWidget` and `service`, and the `barWidget` display block; confirm `Panel.qml` is NOT an entry point
-- [ ] 1.3 Add `LICENSE` (MIT) and a `README.md` skeleton with a placeholder security-disclosure section
-- [ ] 1.4 Verify the folder passes `omarchy plugin validate` and that `qmllint -I "$OMARCHY_PATH/shell"` is clean on the empty QML files
-- [ ] 1.5 Add `tests/` with `node --test` wiring and a trivial passing test to prove the harness runs
+- [x] 1.1 Initialise the git repository so the repo root *is* the plugin (manifest and QML entry points at top level), with no symlinks anywhere
+- [x] 1.2 Write `manifest.json` with `schemaVersion`, `id`, `name`, `version`, `author`, `license`, `description`, `kinds: ["bar-widget","service"]`, `entryPoints` for `barWidget` and `service`, and the `barWidget` display block; confirm `Panel.qml` is NOT an entry point
+- [x] 1.3 Add `LICENSE` (MIT) and a `README.md` skeleton with a placeholder security-disclosure section
+- [x] 1.4 Verify the folder passes `omarchy plugin validate` and that `qmllint -I "$OMARCHY_PATH/shell"` is clean on the empty QML files
+- [x] 1.5 Add `tests/` with `node --test` wiring and a trivial passing test to prove the harness runs
 
 ## 2. Model.js — pure logic and its tests
 
-- [ ] 2.1 Implement `countWords(text)` with unicode-aware whitespace splitting; document CJK handling
-- [ ] 2.2 Implement the per-file count map with absolute-count storage and total-by-re-sum
-- [ ] 2.3 Implement first-sight baseline handling so a newly seen file contributes zero
-- [ ] 2.4 Implement additive vs net delta modes, defaulting to additive so deletions never reduce the day's total
-- [ ] 2.5 Implement daily rollover: append `{date, words, goal}` to a capped history, zero today, retain baselines
-- [ ] 2.6 Implement `pollMs` clamping (1000–30000) and the `probeLookbackMs > pollMs` invariant with clamping
-- [ ] 2.7 Implement stage selection (0–4 from progress thresholds) and mood selection (writing / idle / sleeping / celebrating)
-- [ ] 2.8 Implement the mascot set table and art assembly: `{eyes}` substitution at 3 columns for bar frames and 5 for panel frames, plus the trailing FX column
-- [ ] 2.9 Write unit tests for 2.1–2.8, including: first sight contributes zero, repeated recount is idempotent, deletions do not reduce the total, rollover across a simulated suspend, and clamping behaviour
-- [ ] 2.10 Write the grid-invariant test asserting, for every set × stage × mood, exact panel line count and column widths, exact bar cell width of `barCols + 1`, and ASCII-only content
+- [x] 2.1 Implement `countWords(text)` with unicode-aware whitespace splitting; document CJK handling
+- [x] 2.2 Implement the per-file count map with absolute-count storage and total-by-re-sum
+- [x] 2.3 Implement first-sight baseline handling so a newly seen file contributes zero
+- [x] 2.4 Implement additive vs net delta modes, defaulting to additive so deletions never reduce the day's total
+- [x] 2.5 Implement daily rollover: append `{date, words, goal}` to a capped history, zero today, retain baselines
+- [x] 2.6 Implement `pollMs` clamping (1000–30000) and the `probeLookbackMs > pollMs` invariant with clamping
+- [x] 2.7 Implement stage selection (0–4 from progress thresholds) and mood selection (writing / idle / sleeping / celebrating)
+- [x] 2.8 Implement the mascot set table and art assembly: `{eyes}` substitution at 3 columns for bar frames and 5 for panel frames, plus the trailing FX column
+- [x] 2.9 Write unit tests for 2.1–2.8, including: first sight contributes zero, repeated recount is idempotent, deletions do not reduce the total, rollover across a simulated suspend, and clamping behaviour
+- [x] 2.10 Write the grid-invariant test asserting, for every set × stage × mood, exact panel line count and column widths, exact bar cell width of `barCols + 1`, and ASCII-only content
 
 ## 3. Service.qml — focus, polling, state
 

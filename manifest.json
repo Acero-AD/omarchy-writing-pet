@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.acero-ad.writing-critter",
+  "name": "Writing Critter",
+  "version": "0.1.0",
+  "author": "Diego Acero",
+  "license": "MIT",
+  "description": "A bar critter that grows as you hit your daily writing goal — counts words only from your configured writing apps, by watching files. No keyboard access, no network.",
+  "kinds": ["bar-widget", "service"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Writing Critter",
+    "description": "Grows as you write toward your daily word goal.",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
