@@ -50,3 +50,57 @@ Controls offered in the panel SHALL be limited to those that can be expressed wi
 #### Scenario: Configuration is directed, not performed
 - **WHEN** the user opens the panel's settings view
 - **THEN** it displays the current configuration and the engine commands to change it, and writes nothing itself
+
+### Requirement: No component lifetime may depend on a late-settling value
+No `Loader.active`, `Component` condition, or equivalent lifetime binding may depend on an expression that can be unresolved at construction and resolve a moment later. Anything of that shape builds a subtree and then destroys it during startup. Lifetime SHALL be gated on a value already resolved at construction, or the component SHALL be mounted unconditionally once.
+
+#### Scenario: A late-resolving host reference does not destroy a subtree
+- **WHEN** a reference that is null at construction becomes non-null later in startup
+- **THEN** no already-constructed component is destroyed as a result
+
+#### Scenario: Source-level guard
+- **WHEN** CI inspects the QML sources
+- **THEN** no `Loader` has an `active` binding derived from a host, shell, or service lookup
+
+### Requirement: Nothing holding outstanding asynchronous work may live in a destroyable subtree
+Any object with a pending file read, an in-flight subprocess, or a re-arming timer SHALL be owned by a component that is never destroyed for the lifetime of the plugin. Starting asynchronous work is a claim on the owning object; code that can destroy a subtree MUST NOT be written where such a claim can be outstanding.
+
+#### Scenario: Teardown with a read in flight cannot occur
+- **WHEN** the widget is running with a file read outstanding
+- **THEN** no code path destroys the object that issued the read
+
+#### Scenario: A completion callback never arrives at a dead context
+- **WHEN** an asynchronous read completes
+- **THEN** the object that requested it is still alive and its QML context still has an engine
+
+### Requirement: Refresh and retry timers must not target destroyable components
+A timer that re-arms work on a component SHALL NOT live inside that component. Such a timer keeps the component permanently busy and therefore permanently unsafe to tear down, and converts a rare teardown race into a reliable one.
+
+#### Scenario: Retry does not pin a subtree busy
+- **WHEN** the display is retrying a read because state is unavailable
+- **THEN** the retry is driven from a component that is never destroyed
+
+### Requirement: The widget parses the state file itself and uses no adapter
+The widget SHALL read the state file as text and parse it in JavaScript. It MUST NOT bind a `JsonAdapter` or any object-mapping adapter to the file, in either direction.
+
+#### Scenario: No adapter deserialization path exists
+- **WHEN** CI inspects the QML sources
+- **THEN** no adapter is attached to any file view, and no `var`-typed adapter property exists
+
+#### Scenario: Parsing failure is contained
+- **WHEN** the state file contains invalid JSON
+- **THEN** the parse failure is caught in JavaScript and the previous value is retained
+
+### Requirement: Shared state is owned once, by a stable owner
+Where more than one bar surface exists — one per monitor — the plugin SHALL NOT instantiate more than one owner of file reads or timers. Per-surface widgets SHALL render from shared state rather than each creating their own reader.
+
+#### Scenario: Two monitors, one reader
+- **WHEN** the bar is displayed on two monitors
+- **THEN** exactly one component performs file reads and both surfaces render from it
+
+### Requirement: Isolated-instance testing does not substitute for live verification
+A component passing in a throwaway shell instance SHALL NOT be treated as evidence that it is safe in the live session. Both MUST be exercised before release, in that order.
+
+#### Scenario: Both runs are required
+- **WHEN** a QML change is prepared for release
+- **THEN** it is run against a throwaway instance first and then verified in a live session, and neither alone is accepted

@@ -84,9 +84,22 @@ Each rule lives on the side that needs it, so almost nothing is duplicated: the 
 
 This is the decision the previous attempt most needed. Every prior "fix" was shipped to a live desktop against a symptom that had been inferred rather than observed. Phase 1 is verifiable without risking anything, and it is where all the functional value sits — a correct word counter with a wrong front-end is a solvable problem; the reverse is what we had.
 
+### D8. Lifecycle rules the widget must satisfy
+
+The post-mortem produced four structural rules, and they are encoded as requirements in `critter-widget` rather than left as advice, because each of the four contributing conditions was individually defensible in the commit that introduced it — which is exactly why the combination survived review.
+
+1. **No lifetime binding on a late-settling value.** `active: hostService === null` re-evaluated when `bar.shell` resolved mid-startup, destroying the tree it had just built.
+2. **Outstanding async work forbids destruction.** A pending read, a running process, or a re-arming timer is a live claim on its owner.
+3. **Retry timers live outside what they retry.** A timer inside a component, re-arming work on that component, keeps it permanently busy and permanently unsafe to tear down.
+4. **Shared state has one stable owner.** One bar per monitor otherwise means several readers, and several teardowns.
+
+A fifth is a process rule rather than a code rule: passing in a throwaway shell instance is not evidence of safety in the live session. `Service.qml` loaded and ran correctly in isolation on the same afternoon it was crash-looping the desktop.
+
 ## Risks / Trade-offs
 
-- **The crash cause is still unknown, and the widget will still use `FileView`.** The crashing frame was a JS-value conversion reached through nested signal emissions during event delivery, which is the shape of a QML signal carrying data. A read-only `FileView` with `watchChanges` is a much smaller surface than adapter-backed read/write, but it is not provably unaffected. → Phase 2 must not begin until the diagnosis lands. If `FileView` signalling is implicated, the widget reads on a timer instead of on a change signal, or via a mechanism the diagnosis clears.
+- **The crash is diagnosed, and `FileView` is not the culprit — teardown is.** An async read started by `preload: true` completed after the `Loader` in `BarWidget.qml` flipped `active` to false and destroyed the service tree. The QML context had been invalidated (engine pointer nulled, destruction already emitted) while the C++ objects awaited deferred deletion, so the completion callback ran against a dead context: `JsonAdapter::deserializeRec` hit the first `var`-typed property, called `qmlEngine(this)->fromVariant(...)` on a null engine, and segfaulted. Confirmed in the core: `QJSEngine::create (this=0x0)`, with `QQmlContextData m_engine = 0x0` and `m_hasEmittedDestruction = 1`.
+  → So the constraint for Phase 2 is not "avoid `FileView`" but "never destroy something with async work outstanding". Four conditions had to coincide, none wrong alone: an async read outliving its owner, a `Loader.active` bound to a late-settling value, a `var` property in the adapter, and a retry timer keeping a read permanently in flight. The widget requirements now forbid all four.
+- **The hazard is still present at HEAD.** Reverting `preload: true` removed the trigger, not the cause. `BarWidget.qml` still contains the `Loader` whose `active` is bound to a service lookup that resolves late, and `Service.qml` still holds four `FileView` objects and several `Process` objects inside that destroyable subtree. Any future change that puts async work in flight during startup reinstates the crash. → Phase 2 deletes both files; until then the DO NOT INSTALL warning is what contains it, and removing the `Loader` is the single change that would close it sooner.
 - **Counting rules will exist in Python and their tests in JavaScript.** The 50 existing tests cover the JS implementations of rules that now move to Python. → Port the counting tests alongside the code and keep the original fixtures, so both implementations are checked against the same cases; delete the JS counting code once ported rather than leaving two live copies.
 - **Installation gains a step.** A plugin that was one `omarchy plugin add` now also needs a user service enabled. → Provide a single install command that does both, and make the widget state plainly that the engine is not running when it is not, so the failure is self-explaining rather than silent.
 - **The engine reads the user's documents.** It always did, but now it does so from a separate process that a user may inspect independently. → Keep it dependency-free, single-file where practical, and readable; keep the security guard covering it.
@@ -105,6 +118,6 @@ The plugin is currently uninstalled and the repository carries a DO NOT INSTALL 
 
 ## Open Questions
 
-- The `quickshell` segfault cause, being diagnosed separately. Its outcome decides whether the Phase 2 widget may use `FileView` change signals or must poll.
+- Whether to file the missing null check upstream with Quickshell. `JsonAdapter` dereferences `qmlEngine(this)` unguarded and `FileView` delivers `dataChanged` into a context that has already emitted destruction; both are arguably library bugs. Omarchy is not implicated. The trigger is avoidable in plugin code either way, so this is a courtesy report rather than a dependency.
 - Whether the engine should adopt the companion drop-box protocol as-is, now that it is the component doing the reading, or whether companions should write into the engine's own state directory instead.
 - How the user unit is packaged so that `omarchy plugin add` alone is enough, given that plugin installation does not run arbitrary install scripts.

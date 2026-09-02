@@ -43,18 +43,30 @@
 
 ## 6. Phase 2 — widget, gated on the crash diagnosis
 
-- [ ] 6.1 **Gate: do not start until the segfault diagnosis lands.** Decide from it whether the widget may use file-change signals or must read on a timer
+- [ ] 6.1 Apply the diagnosed lifecycle rules as the design constraint for every item in this group: no lifetime binding on a late-settling value, no async work inside a destroyable subtree, no retry timer inside what it retries, one stable owner for shared reads. File-change signals are permitted — teardown was the fault, not the read
 - [ ] 6.2 Delete `Service.qml` and remove the service kind from the manifest
 - [ ] 6.3 Strip every write, subprocess, adapter and dynamically created component from the widget and panel
 - [ ] 6.4 Read the state file and render, treating every value as untrusted and range-checking before use
 - [ ] 6.5 Keep the presentation exactly as specified — both mascot sets, both resolutions, the grid invariant and its test
 - [ ] 6.6 Implement the resting state and tooltip for a missing or stale state file, recovering without a shell restart
 - [ ] 6.7 Replace panel configuration controls with a display of current settings and the engine commands that change them
-- [ ] 6.8 Extend the CI guard to fail on any process execution, write adapter, or dynamic component creation in QML
+- [ ] 6.8 Extend the CI guard to fail on any process execution, any adapter attached to a file view, any `var`-typed adapter property, and any `Loader.active` bound to a host or service lookup
+- [ ] 6.9 Parse the state file with `JSON.parse` in JavaScript, with no adapter in either direction, and contain parse failures without losing the previous value
+- [ ] 6.10 Ensure exactly one owner performs file reads and holds timers, so a multi-monitor bar does not create several readers or several teardowns
+
+## 6b. Close the hazard that is live at HEAD
+
+The revert removed the trigger, not the cause. These may be done immediately and independently of the engine work.
+
+- [ ] 6b.1 Remove the `Loader` in `BarWidget.qml` whose `active` is bound to the service lookup — this is the single change that closes the crash
+- [ ] 6b.2 Confirm no remaining component holds `FileView` or `Process` objects inside a subtree that any binding can destroy
+- [ ] 6b.3 Record the crash signature and the four lifecycle rules in the repository, so the shape is recognisable rather than rediscovered
+- [ ] 6b.4 Consider reporting the missing null check to Quickshell upstream: `JsonAdapter` dereferences `qmlEngine(this)` unguarded, and `FileView` delivers `dataChanged` into a context that has already emitted destruction. Not an Omarchy issue
 
 ## 7. Phase 2 — live verification
 
-- [ ] 7.1 Install on a live session and confirm the shell's process identifier is unchanged after an hour of normal use
+- [ ] 7.1 Run against a throwaway shell instance first, then install on a live session and confirm the shell's process identifier is unchanged after an hour of normal use. Isolated success is explicitly not sufficient evidence
+- [ ] 7.1a Watch for the crash signature specifically during startup: a tight loop roughly one second after launch, completion-callback frames reached from `sendPostedEvents`, and a `this=0x0` on `qmlEngine()`
 - [ ] 7.2 Confirm the widget tracks the engine: counting, stage changes, celebration at goal
 - [ ] 7.3 Point the widget at a deliberately malformed state file and confirm the shell survives and the critter rests
 - [ ] 7.4 Stop the engine and confirm the widget rests and explains why, then restart it and confirm recovery without a shell restart
