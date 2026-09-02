@@ -269,6 +269,19 @@ Item {
         onTriggered: root.checkRollover()
     }
 
+    // If the load signals never arrive the whole plugin is inert, and that is
+    // exactly the failure that is hardest to see from outside. Retry until
+    // state is loaded rather than trusting one signal.
+    Timer {
+        interval: 2000
+        running: !root.stateLoaded
+        repeat: true
+        onTriggered: {
+            console.log("writing-critter: state not loaded yet, retrying read");
+            stateView.reload();
+        }
+    }
+
     function checkRollover() {
         var current = localDate();
         if (today === "") {
@@ -350,11 +363,23 @@ Item {
     FileView {
         id: stateView
         path: root.stateFile
+        // Without preload the file is only read lazily, so neither loaded nor
+        // loadFailed ever fired and restore() never ran -- leaving the service
+        // alive but permanently pre-state: no settings, no watch paths, and
+        // discovery refusing to run because stateLoaded was false.
+        preload: true
         watchChanges: false
         atomicWrites: true
         printErrors: false
-        onLoaded: root.restore()
-        onLoadFailed: root.restore() // first run: no state file yet
+        onLoaded: {
+            console.log("writing-critter: state loaded from " + root.stateFile);
+            root.restore();
+        }
+        onLoadFailed: {
+            // Expected on first run: the file does not exist yet.
+            console.log("writing-critter: no state file yet, starting fresh");
+            root.restore();
+        }
         adapter: JsonAdapter {
             id: persisted
             property int schema: 1
