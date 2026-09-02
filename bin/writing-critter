@@ -15,6 +15,9 @@ import argparse
 import copy
 import json
 import os
+import select
+import socket
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -151,6 +154,108 @@ class Log:
         print(f"{stamp} {event}" + (f"  {detail}" if detail else ""), flush=True)
 
 
+# ----------------------------------------------------------------- focus
+#
+# The ONLY compositor-specific code in the engine. Everything else works from
+# the plain app-id string this yields, so porting to another compositor means
+# replacing this class and nothing else.
+#
+# Requires Hyprland. Omarchy is Hyprland, so the practical cost is nil. The
+# in-shell version used Wayland's ToplevelManager, which does not exist outside
+# quickshell -- and the event stream is the better fit anyway: it costs nothing
+# while idle, where the old design needed a polling fallback.
+
+
+class HyprlandFocus:
+    EVENT = "activewindow>>"
+
+    def __init__(self, log: Log) -> None:
+        self.log = log
+        self._buffer = ""
+
+    def socket_path(self) -> Path | None:
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+        if not runtime or not signature:
+            return None
+        candidate = Path(runtime) / "hypr" / signature / ".socket2.sock"
+        return candidate if candidate.exists() else None
+
+    def current(self) -> str:
+        """Focus at startup.
+
+        Without this the engine never starts when it is launched with the editor
+        already focused: no transition arrives, so an event-only design waits
+        forever. That exact bug shipped in the in-shell version.
+        """
+        try:
+            out = subprocess.run(
+                ["hyprctl", "activewindow", "-j"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.log("focus.query_failed", error=exc)
+            return ""
+        if out.returncode != 0:
+            self.log("focus.query_failed", status=out.returncode, stderr=out.stderr.strip()[:120])
+            return ""
+        try:
+            return str(json.loads(out.stdout or "{}").get("class", "") or "")
+        except json.JSONDecodeError:
+            self.log("focus.query_unparseable")
+            return ""
+
+    def connect(self) -> socket.socket | None:
+        """Open the event stream. Returned so the caller can select() on it and
+        drive its own cadence from the same loop -- no threads, no polling."""
+        path = self.socket_path()
+        if path is None:
+            self.log("focus.no_socket", hint="HYPRLAND_INSTANCE_SIGNATURE unset or socket missing")
+            return None
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(str(path))
+        self._buffer = ""
+        return sock
+
+    def drain(self, sock: socket.socket) -> list[str]:
+        """Return the app id from each focus change now readable, in order."""
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise ConnectionError("hyprland event stream closed")
+        self._buffer += chunk.decode("utf-8", errors="replace")
+        out = []
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.startswith(self.EVENT):
+                # "activewindow>>CLASS,TITLE"; a title may itself contain commas.
+                out.append(line[len(self.EVENT):].split(",", 1)[0])
+        return out
+
+
+# ----------------------------------------------------------------- matching
+#
+# Wayland app ids are often reverse-DNS ("md.obsidian.Obsidian") while people
+# think in short names ("obsidian"). Exact matching means a whitelist that looks
+# obviously correct silently matches nothing and the critter never wakes -- the
+# real bug that made the in-shell version look broken for a whole session.
+
+
+def app_matches(entry: str, app_id: str) -> bool:
+    if not entry or not app_id:
+        return False
+    e, a = entry.lower(), app_id.lower()
+    if e == a:
+        return True
+    if "." in e:
+        return False  # a dotted entry is a deliberate exact match
+    _, dot, leaf = a.rpartition(".")
+    return bool(dot) and leaf == e
+
+
+def app_in_list(entries: list[str], app_id: str) -> bool:
+    return any(app_matches(e, app_id) for e in entries)
+
+
 # ----------------------------------------------------------------- engine
 
 
@@ -159,10 +264,54 @@ class Engine:
         self.config = config
         self.log = log
         self.focused_app: str = ""
-        self.gate_open: bool = False
-        self.gate_reason: str = "not started"
+        self.last_writing_at: float = 0.0
+        self._gate_open: bool = False
 
-    # Filled in by task group 2 (focus) and group 3 (counting).
+    # ---- the gate: the whole activation model, a pure function of focus ----
+
+    def writing_focused(self) -> bool:
+        return app_in_list(self.config.values["whitelist"], self.focused_app)
+
+    def gate_open(self, now: float | None = None) -> bool:
+        """Open while a writing app is focused, or was within the grace window.
+
+        The grace exists because editors autosave a beat after focus leaves; a
+        strict gate drops the save that finishes just after you alt-tab.
+        """
+        if self.blocking_reason():
+            return False
+        if self.writing_focused():
+            return True
+        now = time.time() if now is None else now
+        grace = float(self.config.values["graceSeconds"])
+        return self.last_writing_at > 0 and (now - self.last_writing_at) < grace
+
+    def set_focus(self, app_id: str, now: float | None = None) -> bool:
+        """Record a focus change. Returns True if the gate state changed."""
+        now = time.time() if now is None else now
+        was_open = self._gate_open
+        self.focused_app = app_id
+        if self.writing_focused():
+            self.last_writing_at = now
+        self._gate_open = self.gate_open(now)
+        if self._gate_open != was_open:
+            self.log("gate." + ("open" if self._gate_open else "closed"), app=app_id or "(none)")
+            return True
+        self.log("focus.change", app=app_id or "(none)", gate="open" if self._gate_open else "closed")
+        return False
+
+    def refresh_gate(self, now: float | None = None) -> bool:
+        """Re-evaluate without a focus change, so the grace window can expire."""
+        now = time.time() if now is None else now
+        was_open = self._gate_open
+        self._gate_open = self.gate_open(now)
+        if self._gate_open != was_open:
+            self.log("gate." + ("open" if self._gate_open else "closed"), reason="grace expired")
+        return self._gate_open
+
+    def cycle(self) -> None:
+        """One counting cycle. Implemented in task group 3."""
+
     def blocking_reason(self) -> str | None:
         """Why counting cannot happen right now, or None if it can."""
         if not self.config.values["watch"]:
@@ -187,9 +336,35 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"\nnot counting: {blocked}", file=sys.stderr)
         return 1
 
-    log("engine.ready", goal=config.values["goal"], paths=len(config.watch_paths))
-    print("focus tracking and counting arrive in task groups 2 and 3", file=sys.stderr)
-    return 0
+    focus = HyprlandFocus(log)
+    engine.set_focus(focus.current())
+    log("engine.ready", goal=config.values["goal"], paths=len(config.watch_paths),
+        poll=config.poll_seconds, lookback=config.lookback_seconds)
+
+    sock = focus.connect()
+    if sock is None:
+        print("\nno Hyprland event socket; is HYPRLAND_INSTANCE_SIGNATURE set?", file=sys.stderr)
+        return 1
+
+    # One loop drives both: focus events wake it, and the select timeout
+    # provides the counting cadence. No threads, and nothing polls the
+    # compositor.
+    try:
+        with sock:
+            while True:
+                readable, _, _ = select.select([sock], [], [], config.poll_seconds)
+                if readable:
+                    for app_id in focus.drain(sock):
+                        engine.set_focus(app_id)
+                    continue
+                if engine.refresh_gate():
+                    engine.cycle()
+    except ConnectionError as exc:
+        log("engine.stop", reason=exc)
+        return 1
+    except KeyboardInterrupt:
+        log("engine.stop", reason="interrupted")
+        return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:

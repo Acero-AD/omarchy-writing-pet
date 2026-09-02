@@ -179,3 +179,92 @@ class TestStateReading(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestAppMatching(unittest.TestCase):
+    def test_exact_case_insensitive(self):
+        self.assertTrue(engine.app_matches("typora", "typora"))
+        self.assertTrue(engine.app_matches("Typora", "typora"))
+
+    def test_short_name_matches_reverse_dns(self):
+        # The real bug: Obsidian's Wayland app id is md.obsidian.Obsidian, so a
+        # whitelist saying "obsidian" matched nothing and the critter never woke.
+        self.assertTrue(engine.app_matches("obsidian", "md.obsidian.Obsidian"))
+        self.assertTrue(engine.app_matches("bar", "com.github.foo.Bar"))
+
+    def test_dotted_entry_is_exact(self):
+        self.assertTrue(engine.app_matches("md.obsidian.Obsidian", "md.obsidian.Obsidian"))
+        self.assertFalse(engine.app_matches("md.obsidian.Obsidian", "org.other.Obsidian"))
+
+    def test_substring_never_matches(self):
+        self.assertFalse(engine.app_matches("write", "omawrite"))
+        self.assertFalse(engine.app_matches("obsidian", "md.obsidian.Helper.Thing"))
+
+    def test_empty_inputs(self):
+        self.assertFalse(engine.app_matches("", "typora"))
+        self.assertFalse(engine.app_matches("typora", ""))
+
+    def test_defaults_wake_on_real_app_ids(self):
+        wl = engine.DEFAULTS["whitelist"]
+        for app in ("md.obsidian.Obsidian", "typora", "omawrite", "libreoffice-writer"):
+            self.assertTrue(engine.app_in_list(wl, app), app)
+        for app in ("zen", "foot", "steam_app_1331550"):
+            self.assertFalse(engine.app_in_list(wl, app), f"{app} must not wake the critter")
+
+
+class TestGate(TempConfig):
+    def _engine(self, **over):
+        values = {"watch": ["/tmp"], "graceSeconds": 15}
+        values.update(over)
+        self.write(json.dumps(values))
+        return engine.Engine(engine.Config.load(self.path), engine.Log(enabled=False))
+
+    def test_closed_before_any_focus(self):
+        self.assertFalse(self._engine().gate_open(now=1000))
+
+    def test_open_while_writing_app_focused(self):
+        e = self._engine()
+        e.set_focus("md.obsidian.Obsidian", now=1000)
+        self.assertTrue(e.gate_open(now=1000))
+
+    def test_closed_for_browser_and_terminal(self):
+        e = self._engine()
+        for app in ("zen", "foot"):
+            e.last_writing_at = 0.0
+            e.set_focus(app, now=1000)
+            self.assertFalse(e.gate_open(now=1000), app)
+
+    def test_grace_keeps_gate_open_briefly_after_focus_leaves(self):
+        # Editors autosave a beat after focus leaves; a strict gate drops it.
+        e = self._engine()
+        e.set_focus("typora", now=1000)
+        e.set_focus("zen", now=1005)
+        self.assertTrue(e.gate_open(now=1005), "within grace")
+        self.assertTrue(e.gate_open(now=1014), "still within grace")
+
+    def test_grace_expires(self):
+        e = self._engine()
+        e.set_focus("typora", now=1000)
+        e.set_focus("zen", now=1001)
+        self.assertFalse(e.gate_open(now=1016), "grace has expired")
+
+    def test_gate_stays_closed_without_watch_paths(self):
+        e = self._engine(watch=[])
+        e.set_focus("typora", now=1000)
+        self.assertFalse(e.gate_open(now=1000), "nothing to count means nothing to do")
+
+    def test_refresh_detects_grace_expiry_without_a_focus_change(self):
+        e = self._engine()
+        e.set_focus("typora", now=1000)
+        e.set_focus("zen", now=1001)
+        self.assertTrue(e.refresh_gate(now=1005))
+        self.assertFalse(e.refresh_gate(now=1020))
+
+    def test_no_work_is_attempted_while_the_gate_is_closed(self):
+        e = self._engine()
+        calls = []
+        e.cycle = lambda: calls.append(1)
+        e.set_focus("zen", now=1000)
+        if e.refresh_gate(now=1000):
+            e.cycle()
+        self.assertEqual(calls, [], "a closed gate must spawn no work at all")

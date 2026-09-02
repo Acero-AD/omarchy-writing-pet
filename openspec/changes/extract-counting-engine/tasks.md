@@ -8,12 +8,12 @@
 
 ## 2. Phase 1 — focus tracking
 
-- [ ] 2.1 Query the compositor once at startup for the currently focused window, so a session that begins with the editor already focused is handled
-- [ ] 2.2 Subscribe to the compositor event stream and track focus changes without polling
-- [ ] 2.3 Port forgiving app matching (exact, or final dot-segment, never substring) and its test cases
-- [ ] 2.4 Implement the grace window so autosaves landing just after focus loss still count
-- [ ] 2.5 Implement the counting gate and assert that no subprocess is spawned while it is closed
-- [ ] 2.6 Isolate the compositor-specific code behind one function and document the Hyprland requirement
+- [x] 2.1 Query the compositor once at startup for the currently focused window, so a session that begins with the editor already focused is handled
+- [x] 2.2 Subscribe to the compositor event stream and track focus changes without polling
+- [x] 2.3 Port forgiving app matching (exact, or final dot-segment, never substring) and its test cases
+- [x] 2.4 Implement the grace window so autosaves landing just after focus loss still count
+- [x] 2.5 Implement the counting gate and assert that no subprocess is spawned while it is closed
+- [x] 2.6 Isolate the compositor-specific code behind one function and document the Hyprland requirement
 
 ## 3. Phase 1 — counting
 
