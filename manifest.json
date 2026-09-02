@@ -5,11 +5,12 @@
   "version": "0.1.0",
   "author": "Diego Acero",
   "license": "MIT",
-  "description": "A bar critter that grows as you hit your daily writing goal — counts words only from your configured writing apps, by watching files. No keyboard access, no network.",
-  "kinds": ["bar-widget", "service"],
+  "description": "A bar critter that grows as you hit your daily writing goal \u2014 counts words only from your configured writing apps, by watching files. No keyboard access, no network.",
+  "kinds": [
+    "bar-widget"
+  ],
   "entryPoints": {
-    "barWidget": "BarWidget.qml",
-    "service": "Service.qml"
+    "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Writing Critter",

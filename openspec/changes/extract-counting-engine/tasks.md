@@ -44,7 +44,7 @@
 ## 6. Phase 2 — widget, gated on the crash diagnosis
 
 - [ ] 6.1 Apply the diagnosed lifecycle rules as the design constraint for every item in this group: no lifetime binding on a late-settling value, no async work inside a destroyable subtree, no retry timer inside what it retries, one stable owner for shared reads. File-change signals are permitted — teardown was the fault, not the read
-- [ ] 6.2 Delete `Service.qml` and remove the service kind from the manifest
+- [x] 6.2 Delete `Service.qml` and remove the service kind from the manifest _(pulled forward into 6b: the lifecycle lint flagged its JsonAdapter, and deleting the dead file was the honest fix rather than suppressing the warning)_
 - [ ] 6.3 Strip every write, subprocess, adapter and dynamically created component from the widget and panel
 - [ ] 6.4 Read the state file and render, treating every value as untrusted and range-checking before use
 - [ ] 6.5 Keep the presentation exactly as specified — both mascot sets, both resolutions, the grid invariant and its test
@@ -58,9 +58,9 @@
 
 The revert removed the trigger, not the cause. These may be done immediately and independently of the engine work.
 
-- [ ] 6b.1 Remove the `Loader` in `BarWidget.qml` whose `active` is bound to the service lookup — this is the single change that closes the crash
-- [ ] 6b.2 Confirm no remaining component holds `FileView` or `Process` objects inside a subtree that any binding can destroy
-- [ ] 6b.3 Record the crash signature and the four lifecycle rules in the repository, so the shape is recognisable rather than rediscovered
+- [x] 6b.1 Remove the `Loader` in `BarWidget.qml` whose `active` is bound to the service lookup — this is the single change that closes the crash
+- [x] 6b.2 Confirm no remaining component holds `FileView` or `Process` objects inside a subtree that any binding can destroy
+- [x] 6b.3 Record the crash signature and the four lifecycle rules in the repository, so the shape is recognisable rather than rediscovered
 - [ ] 6b.4 Consider reporting the missing null check to Quickshell upstream: `JsonAdapter` dereferences `qmlEngine(this)` unguarded, and `FileView` delivers `dataChanged` into a context that has already emitted destruction. Not an Omarchy issue
 
 ## 7. Phase 2 — live verification

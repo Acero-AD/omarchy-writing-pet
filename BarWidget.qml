@@ -12,25 +12,22 @@ BarWidget {
 
     readonly property string pluginId: "io.github.acero-ad.writing-critter"
 
-    // The manifest declares a `service` kind, and a host that mounts it gives
-    // us a single shared instance. Do not *depend* on that: a plugin shipped to
-    // strangers cannot assume every host, on every version, mounts third-party
-    // services -- and when it silently does not, every symptom looks like the
-    // plugin is broken rather than unmounted. So fall back to hosting it here.
-    readonly property var hostService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
+    // There was a Loader here that hosted Service.qml when the shell did not
+    // mount it, with `active: hostService === null`. That binding is not
+    // resolved at construction: `bar.shell` arrives later in startup, so the
+    // Loader built the service tree and then destroyed it a moment later.
+    //
+    // On its own that was survivable. Combined with an async read in flight it
+    // was fatal -- the read completed against a QML context whose engine
+    // pointer had already been nulled, and quickshell segfaulted in a loop that
+    // took the whole desktop shell down. See docs/POSTMORTEM-ORPHANED-READ.md.
+    //
+    // Rule: never gate a component's lifetime on a value that settles late.
+    // Nothing here creates or destroys a subtree from a binding any more. The
+    // widget renders whatever the (currently unmounted) service reports, and
+    // renders its resting state when there is none.
+    readonly property var service: bar && bar.shell && typeof bar.shell.serviceFor === "function"
         ? bar.shell.serviceFor(pluginId) : null
-
-    Loader {
-        id: fallbackService
-        active: root.hostService === null
-        source: Qt.resolvedUrl("Service.qml")
-        onLoaded: console.log("writing-critter: shell did not mount the service; hosting it in the bar widget")
-    }
-
-    readonly property var service: hostService ? hostService : fallbackService.item
-
-    Component.onCompleted: console.log("writing-critter: bar widget ready, hostService="
-                                       + (hostService !== null) + " service=" + (service !== null))
 
     // Inline shell.json settings win over stored ones; the service resolves the
     // precedence, this just hands them over.

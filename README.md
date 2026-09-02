@@ -26,12 +26,15 @@ progress, and a streak of the last seven days.
                         "The shell is thinning."
 ```
 
-> ## ⚠️ DO NOT INSTALL — crashes the Omarchy shell
+> ## ⚠️ DO NOT INSTALL — no counting, and a crash history
 >
-> On a live Omarchy session this plugin **segfaults `quickshell` in a crash
-> loop**, taking the entire desktop shell down with it. Recovering required
-> removing the plugin from `shell.json` and from disk, then restarting the
-> shell.
+> On 2026-09-02 this plugin **segfaulted `quickshell` in a crash loop**, taking
+> the entire desktop shell down with it. That crash is now diagnosed and its
+> cause removed — see
+> [docs/POSTMORTEM-ORPHANED-READ.md](docs/POSTMORTEM-ORPHANED-READ.md) — but the
+> plugin still **does not count anything**: the counting engine is being rebuilt
+> outside the shell process, and the widget currently renders a resting critter
+> and nothing more.
 >
 > Do not run `omarchy plugin add` on this repository until this line is gone.
 > If you already have, remove it:
@@ -204,7 +207,7 @@ most visible way this plugin can look broken.
 | Live bar rendering | ✅ the critter renders in the bar |
 | Service mounting | ⚠️ the shell does not mount third-party services; the bar widget hosts it instead |
 | Counting, discovery, rollover | ⬜ never reached — see the crash above |
-| Shell stability | ❌ SIGSEGV crash loop, undiagnosed |
+| Shell stability | ⚠️ crash diagnosed and cause removed; no async work remains in QML, unverified on a live session |
 | Screenshot / marketplace submission | ⬜ pending |
 
 Design rationale and the full technical spec live in
