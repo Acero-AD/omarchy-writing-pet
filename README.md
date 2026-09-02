@@ -164,7 +164,7 @@ language without touching this plugin.
 ## Development
 
 ```bash
-node --test tests/              # 38 unit tests, no dependencies
+node --test tests/*.test.mjs    # 38 unit tests, no dependencies
 ./scripts/security-guard.sh     # privacy constraints + command allowlist
 omarchy plugin validate .
 qmllint -I "$OMARCHY_PATH/shell" *.qml

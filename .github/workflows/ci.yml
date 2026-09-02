@@ -18,7 +18,7 @@ jobs:
       # No dependencies to install: Model.js is plain JS and the tests use the
       # built-in node:test runner.
       - name: Unit tests (includes the mascot grid invariant)
-        run: node --test tests/
+        run: node --test tests/*.test.mjs
 
       - name: Security guard (no input capture, network, or privilege escalation)
         run: ./scripts/security-guard.sh
