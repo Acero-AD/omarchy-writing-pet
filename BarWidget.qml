@@ -11,7 +11,26 @@ BarWidget {
     moduleName: "io.github.acero-ad.writing-critter"
 
     readonly property string pluginId: "io.github.acero-ad.writing-critter"
-    readonly property var service: bar && bar.shell ? bar.shell.serviceFor(pluginId) : null
+
+    // The manifest declares a `service` kind, and a host that mounts it gives
+    // us a single shared instance. Do not *depend* on that: a plugin shipped to
+    // strangers cannot assume every host, on every version, mounts third-party
+    // services -- and when it silently does not, every symptom looks like the
+    // plugin is broken rather than unmounted. So fall back to hosting it here.
+    readonly property var hostService: bar && bar.shell && typeof bar.shell.serviceFor === "function"
+        ? bar.shell.serviceFor(pluginId) : null
+
+    Loader {
+        id: fallbackService
+        active: root.hostService === null
+        source: Qt.resolvedUrl("Service.qml")
+        onLoaded: console.log("writing-critter: shell did not mount the service; hosting it in the bar widget")
+    }
+
+    readonly property var service: hostService ? hostService : fallbackService.item
+
+    Component.onCompleted: console.log("writing-critter: bar widget ready, hostService="
+                                       + (hostService !== null) + " service=" + (service !== null))
 
     // Inline shell.json settings win over stored ones; the service resolves the
     // precedence, this just hands them over.
