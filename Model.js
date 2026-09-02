@@ -371,6 +371,35 @@ function panelArt(setId, stage, mood) {
   return out;
 }
 
+// ------------------------------------------------------------ app matching
+//
+// Wayland appIds are frequently reverse-DNS ("md.obsidian.Obsidian",
+// "com.github.foo.Bar") while users think in short names ("obsidian"). Exact
+// matching means a whitelist that looks obviously right silently matches
+// nothing, and the critter simply never wakes with no indication why.
+//
+// So an entry matches when it equals the appId outright, or when it equals the
+// segment after the final dot. A dotted entry is still matched exactly, so a
+// user can be specific when two apps share a leaf name.
+
+function appMatches(entry, appId) {
+  if (!entry || !appId) return false;
+  var e = String(entry).toLowerCase();
+  var a = String(appId).toLowerCase();
+  if (e === a) return true;
+  if (e.indexOf(".") !== -1) return false;
+  var dot = a.lastIndexOf(".");
+  return dot !== -1 && a.slice(dot + 1) === e;
+}
+
+function appInList(list, appId) {
+  if (!list) return false;
+  for (var i = 0; i < list.length; i++) {
+    if (appMatches(list[i], appId)) return true;
+  }
+  return false;
+}
+
 // -------------------------------------------------------- path discovery
 //
 // Typing a path is the one thing standing between install and a working
@@ -557,6 +586,8 @@ if (typeof module !== "undefined" && module.exports) {
     sourceIsActive: sourceIsActive,
     pathIsClaimed: pathIsClaimed,
     parseObsidianVaults: parseObsidianVaults,
-    rankDiscoveredDirs: rankDiscoveredDirs
+    rankDiscoveredDirs: rankDiscoveredDirs,
+    appMatches: appMatches,
+    appInList: appInList
   };
 }

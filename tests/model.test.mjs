@@ -376,3 +376,40 @@ test("rankDiscoveredDirs: empty input", () => {
   assert.deepEqual(M.rankDiscoveredDirs("", 3), []);
   assert.deepEqual(M.rankDiscoveredDirs(null, 3), []);
 });
+
+// -------------------------------------------------------------- app matching
+
+test("appMatches: exact, case-insensitive", () => {
+  assert.equal(M.appMatches("typora", "typora"), true);
+  assert.equal(M.appMatches("Typora", "typora"), true);
+  assert.equal(M.appMatches("omawrite", "omawrite"), true);
+});
+
+test("appMatches: a short name matches a reverse-DNS appId", () => {
+  // The real bug: Obsidian's Wayland appId is md.obsidian.Obsidian
+  assert.equal(M.appMatches("obsidian", "md.obsidian.Obsidian"), true);
+  assert.equal(M.appMatches("bar", "com.github.foo.Bar"), true);
+});
+
+test("appMatches: a dotted entry must match exactly", () => {
+  assert.equal(M.appMatches("md.obsidian.Obsidian", "md.obsidian.Obsidian"), true);
+  assert.equal(M.appMatches("md.obsidian.Obsidian", "org.other.Obsidian"), false);
+});
+
+test("appMatches: does not match unrelated apps", () => {
+  assert.equal(M.appMatches("obsidian", "zen"), false);
+  assert.equal(M.appMatches("obsidian", "md.obsidian.Helper.Something"), false);
+  assert.equal(M.appMatches("write", "omawrite"), false, "substring is not a match");
+  assert.equal(M.appMatches("", "typora"), false);
+  assert.equal(M.appMatches("typora", ""), false);
+});
+
+test("appInList: default whitelist wakes on the real appIds", () => {
+  const wl = M.DEFAULT_SETTINGS.whitelist;
+  assert.equal(M.appInList(wl, "md.obsidian.Obsidian"), true);
+  assert.equal(M.appInList(wl, "typora"), true);
+  assert.equal(M.appInList(wl, "omawrite"), true);
+  assert.equal(M.appInList(wl, "libreoffice-writer"), true);
+  assert.equal(M.appInList(wl, "zen"), false, "a browser must not wake the critter");
+  assert.equal(M.appInList(wl, "foot"), false, "a terminal must not wake the critter");
+});

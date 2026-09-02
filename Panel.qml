@@ -358,14 +358,51 @@ Panel {
                         font.pixelSize: Style.font.caption
                     }
 
-                    Text {
-                        width: parent.width
-                        text: root.whitelistText
-                        color: root.barForeground
-                        opacity: 0.8
-                        font.family: "monospace"
-                        font.pixelSize: Style.font.bodySmall
-                        wrapMode: Text.WordWrap
+                    Repeater {
+                        model: root.service ? root.service.whitelist : []
+                        delegate: Item {
+                            required property var modelData
+                            required property int index
+                            width: content.width
+                            height: Style.space(22)
+                            Text {
+                                anchors.left: parent.left
+                                anchors.right: appRemove.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: String(parent.modelData)
+                                color: root.barForeground
+                                opacity: 0.85
+                                font.family: "monospace"
+                                font.pixelSize: Style.font.bodySmall
+                                elide: Text.ElideMiddle
+                            }
+                            Rectangle {
+                                id: appRemove
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: Style.space(20)
+                                height: Style.space(20)
+                                radius: Style.space(4)
+                                visible: !root.whitelistLocked
+                                color: appRemoveMouse.containsMouse
+                                    ? Qt.rgba(root.barForeground.r, root.barForeground.g, root.barForeground.b, 0.16)
+                                    : "transparent"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "x"
+                                    color: root.barForeground
+                                    font.family: "monospace"
+                                    font.pixelSize: Style.font.bodySmall
+                                }
+                                MouseArea {
+                                    id: appRemoveMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: if (root.service) root.service.removeWhitelistAt(parent.parent.index)
+                                }
+                            }
+                        }
                     }
 
                     // Naming a window is the single most likely thing a user
@@ -398,7 +435,7 @@ Panel {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.addFocusedApp()
+                            onClicked: if (root.service) root.service.addWhitelistApp(root.service.activeApp)
                         }
                     }
 
@@ -640,11 +677,7 @@ Panel {
         return rows;
     }
 
-    readonly property string whitelistText: {
-        if (!service) return "";
-        var list = service.whitelist;
-        return list.length ? list.join(", ") : "(none configured)";
-    }
+    readonly property bool whitelistLocked: service ? service.isOverridden("whitelist") : false
 
     readonly property bool watchLocked: service ? service.isOverridden("watch") : false
 
@@ -670,11 +703,4 @@ Panel {
         }
     }
 
-    function addFocusedApp() {
-        if (!service) return;
-        var list = [];
-        for (var i = 0; i < service.whitelist.length; i++) list.push(service.whitelist[i]);
-        list.push(service.activeApp);
-        setSetting("whitelist", list);
-    }
 }

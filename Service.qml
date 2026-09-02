@@ -65,12 +65,7 @@ Item {
     readonly property string activeApp: activeToplevel ? String(activeToplevel.appId || "") : ""
 
     function isWritingApp(appId) {
-        if (!appId) return false;
-        var needle = appId.toLowerCase();
-        for (var i = 0; i < whitelist.length; i++) {
-            if (String(whitelist[i]).toLowerCase() === needle) return true;
-        }
-        return false;
+        return Model.appInList(whitelist, appId);
     }
 
     readonly property bool writingAppFocused: isWritingApp(activeApp)
@@ -206,9 +201,51 @@ Item {
     // Panel edits land in the plugin's own state file. shell.json is the user's
     // file and is never written by the plugin; keys pinned there simply win on
     // read, and the panel renders those fields locked.
+    property bool stateLoaded: false
+
     function writeSettings(next) {
+        // Before the state file has loaded, `persisted.settings` is empty.
+        // Merging into that and writing would silently erase every setting the
+        // user already has -- mascot, goal, whitelist -- on the first write
+        // after startup. Refuse rather than destroy.
+        if (!stateLoaded) return false;
         persisted.settings = next;
         stateView.writeAdapter();
+        return true;
+    }
+
+    function mergedSettings(name, value) {
+        var next = {};
+        var stored = stateSettings();
+        for (var k in stored) {
+            if (Object.prototype.hasOwnProperty.call(stored, k)) next[k] = stored[k];
+        }
+        next[name] = value;
+        return next;
+    }
+
+    function whitelistList() {
+        var out = [];
+        for (var i = 0; i < whitelist.length; i++) out.push(String(whitelist[i]));
+        return out;
+    }
+
+    function addWhitelistApp(appId) {
+        if (isOverridden("whitelist")) return;
+        var id = String(appId || "");
+        if (id.length === 0) return;
+        var list = whitelistList();
+        if (list.indexOf(id) !== -1) return;
+        list.push(id);
+        writeSettings(mergedSettings("whitelist", list));
+    }
+
+    function removeWhitelistAt(index) {
+        if (isOverridden("whitelist")) return;
+        var list = whitelistList();
+        if (index < 0 || index >= list.length) return;
+        list.splice(index, 1);
+        writeSettings(mergedSettings("whitelist", list));
     }
 
     function sourceStatus() {
@@ -276,6 +313,7 @@ Item {
         byOrigin = persisted.byOrigin || {};
         var restored = persisted.tracking;
         tracking = (restored && restored.files) ? restored : Model.emptyTracking();
+        stateLoaded = true;
         checkRollover();
         // Settings are only known once state has loaded, so this is the first
         // moment discovery can tell whether a watch path exists.
@@ -504,15 +542,7 @@ Item {
             list.push({ path: candidate, recursive: true, extensions: [".md", ".txt"] });
             added++;
         }
-        if (added > 0) {
-            var next = {};
-            var stored = stateSettings();
-            for (var k in stored) {
-                if (Object.prototype.hasOwnProperty.call(stored, k)) next[k] = stored[k];
-            }
-            next["watch"] = list;
-            writeSettings(next);
-        }
+        if (added > 0) writeSettings(mergedSettings("watch", list));
         return added;
     }
 
@@ -527,13 +557,7 @@ Item {
                 extensions: watchEntries[i].extensions || [".md", ".txt"]
             });
         }
-        var next = {};
-        var stored = stateSettings();
-        for (var k in stored) {
-            if (Object.prototype.hasOwnProperty.call(stored, k)) next[k] = stored[k];
-        }
-        next["watch"] = list;
-        writeSettings(next);
+        writeSettings(mergedSettings("watch", list));
     }
 
     // Automatic runs are rate-limited and only fire with nothing configured, so
