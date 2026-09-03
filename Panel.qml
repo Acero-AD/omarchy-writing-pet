@@ -125,8 +125,13 @@ Panel {
                     textFormat: Text.PlainText
                     horizontalAlignment: Text.AlignHCenter
                     lineHeight: 1.15
-                    // Reserved so the panel does not resize as the critter grows.
-                    height: Style.font.body * 1.15 * root.mascotSet.rows
+                    // No explicit height. It used to reserve
+                    // `font.body * 1.15 * rows`, which clipped the last row --
+                    // the bird's feet -- into the count below it, because QML's
+                    // lineHeight is proportional to the font's natural line
+                    // height (ascent + descent + leading), not to pixelSize.
+                    // Nothing needs reserving anyway: every set renders exactly
+                    // `rows` lines at every stage, asserted in the model tests.
                 }
 
                 Text {
