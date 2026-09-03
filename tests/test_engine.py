@@ -7,6 +7,7 @@ import os
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -443,10 +444,41 @@ class TestRolloverAndResilience(TempConfig):
         e.write_state()
         payload = json.loads(e.state_path.read_text())
         for field in ("schema", "date", "goal", "wordsToday", "byOrigin",
-                      "history", "mascot", "gateOpen", "updatedAt", "tracking"):
+                      "history", "mascot", "gateOpen", "updatedAt"):
             self.assertIn(field, payload, f"docs/STATE-FILE.md promises '{field}'")
         self.assertEqual(payload["schema"], 1)
         self.assertEqual(payload["wordsToday"], 42)
+        self.assertNotIn("tracking", payload,
+                         "the widget must not parse per-file bookkeeping")
+        self.assertNotIn("/a.md", e.state_path.read_text(),
+                         "no note path may reach the file the desktop shell reads")
+        self.assertIn("/a.md", e.tracking_path.read_text())
+
+    def test_state_is_published_before_the_first_cycle(self):
+        """A reader must be able to tell a fresh engine from a stopped one."""
+        e = self._engine()
+        e.load_state(e.state_path)
+        e.seed_baselines()
+        e.write_state()
+        payload = json.loads(e.state_path.read_text())
+        self.assertLess(time.time() - payload["updatedAt"], 5,
+                        "updatedAt must be fresh from startup, not from the first edit")
+
+    def test_setting_state_path_moves_tracking_with_it(self):
+        e = self._engine()
+        self.assertEqual(e.tracking_path.parent, e.state_path.parent,
+                         "a redirected engine must not write into the real state dir")
+        self.assertEqual(e.tracking_path.name, "tracking.json")
+
+    def test_the_old_single_file_layout_is_migrated(self):
+        e = self._engine()
+        e.state_path.write_text(json.dumps({
+            "schema": 1, "date": engine.local_date(), "wordsToday": 250,
+            "tracking": {"/a.md": [100, 350, 250]},
+        }))
+        again = self._engine()
+        again.load_state(e.state_path)
+        self.assertEqual(again.words, 250, "an upgrade must not lose today's count")
 class TestFocusLogging(TempConfig):
     def _engine(self):
         self.write(json.dumps({"watch": ["/tmp"], "graceSeconds": 15}))

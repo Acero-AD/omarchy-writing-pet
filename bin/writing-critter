@@ -37,6 +37,11 @@ def _xdg(var: str, default: str) -> Path:
 
 CONFIG_PATH = _xdg("XDG_CONFIG_HOME", ".config") / "writing-critter" / "config.json"
 STATE_PATH = _xdg("XDG_STATE_HOME", ".local/state") / "writing-critter" / "state.json"
+# Per-file bookkeeping lives apart from state.json on purpose. It is the bulk of
+# the data (267 files was 99% of a real state file) and it holds the path of
+# every note, so keeping it here means the bar widget neither parses it nor ever
+# holds the user's note titles in the desktop shell process.
+TRACKING_PATH = STATE_PATH.with_name("tracking.json")
 
 # ----------------------------------------------------------------- config
 
@@ -409,11 +414,25 @@ class Engine:
         self.focused_app: str = ""
         self.last_writing_at: float = 0.0
         self._gate_open: bool = False
-        self.state_path: Path = STATE_PATH
+        self.state_path = STATE_PATH  # setter derives tracking_path
         self.today: str = local_date()
         self.history: list[dict[str, Any]] = []
         self.tracker: Tracker = Tracker()
         self.words: int = 0
+
+    @property
+    def state_path(self) -> Path:
+        return self._state_path
+
+    @state_path.setter
+    def state_path(self, path: Path) -> None:
+        """Setting the state path always moves the tracking file with it.
+
+        These were two independent attributes once, and a test that redirected
+        only state_path wrote its bookkeeping into the real ~/.local/state.
+        """
+        self._state_path = path
+        self.tracking_path = path.with_name("tracking.json")
 
     # ---- the gate: the whole activation model, a pure function of focus ----
 
@@ -472,7 +491,13 @@ class Engine:
         raw = read_state(path) or {}
         self.today = str(raw.get("date") or local_date())
         self.history = raw.get("history") if isinstance(raw.get("history"), list) else []
-        self.tracker = Tracker.from_json(raw.get("tracking"))
+        tracking = read_state(self.tracking_path)
+        if tracking is None:
+            # Upgrade from the single-file layout: without this the tracker
+            # starts empty, seed_baselines rebaselines every file, and today's
+            # count silently resets to zero.
+            tracking = raw.get("tracking")
+        self.tracker = Tracker.from_json(tracking)
         self.words = self.tracker.total()
         self.check_rollover()
 
@@ -487,9 +512,10 @@ class Engine:
             "mascot": self.config.values["mascot"],
             "gateOpen": self._gate_open,
             "updatedAt": time.time(),
-            "tracking": self.tracker.to_json(),
         }
         write_atomic(self.state_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        write_atomic(self.tracking_path,
+                     json.dumps(self.tracker.to_json(), indent=2, sort_keys=True) + "\n")
 
     def check_rollover(self, today: str | None = None) -> bool:
         today = local_date() if today is None else today
@@ -585,6 +611,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     config_mtime = config.mtime()
     focus = HyprlandFocus(log)
     engine.set_focus(focus.current())
+    # Publish once before waiting on the socket. Readers use updatedAt to tell a
+    # live engine from a stopped one, and a cycle only writes when a file
+    # changed - so without this the state looks stale from every restart until
+    # the user happens to type, and the critter reads as dead while it is fine.
+    engine.write_state()
     log("engine.ready", goal=config.values["goal"], paths=len(config.watch_paths),
         poll=config.poll_seconds, lookback=config.lookback_seconds)
 

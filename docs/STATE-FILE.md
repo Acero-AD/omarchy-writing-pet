@@ -26,8 +26,7 @@ falling back to `~/.local/state/writing-critter/state.json` when
   "history": [ { "date": "2026-09-01", "words": 980, "goal": 500 } ],
   "mascot": "bird",
   "gateOpen": true,
-  "updatedAt": 1788363011.42,
-  "tracking": { "/home/you/notes/draft.md": [1000, 1412, 412] }
+  "updatedAt": 1788363011.42
 }
 ```
 
@@ -42,7 +41,12 @@ falling back to `~/.local/state/writing-critter/state.json` when
 | `mascot` | Which mascot set the user chose. |
 | `gateOpen` | Whether counting is currently active — a writing app is focused, or was within the grace window. |
 | `updatedAt` | Unix seconds of the last write. This is how you detect a stopped engine. |
-| `tracking` | Engine bookkeeping: `[base, last, peak]` per file. **Not for readers.** |
+
+Per-file bookkeeping lives in a sibling `tracking.json`, not here. It is the
+bulk of the data — on a 267-note vault it was 99% of a combined file — and it
+names every file the engine has seen. Keeping it separate means a bar widget
+neither parses it on every update nor ever holds the user's note titles in the
+desktop shell process. **Readers must not open it.**
 
 ## Rules for readers
 
