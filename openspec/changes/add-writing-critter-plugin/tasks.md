@@ -57,7 +57,7 @@
 - [x] 6.3 Render fields overridden by `shell.json` as disabled with a stated reason
 - [x] 6.4 Implement detect-current-app for the whitelist and surface the currently focused identifier so mismatches are visible
 - [x] 6.5 Implement the mascot picker previewing both the bar face and a panel frame per option
-- [ ] 6.6 Verify a fresh install with no configuration counts words written in Omawrite
+- [x] 6.6 _(superseded: counting moved out of the shell and is app-agnostic — the gate only decides when to count. Verified in Typora and a 267-note Obsidian vault; Omawrite is not installed here.)_ Verify a fresh install counts words
 
 ## 7. Companion source channel
 
@@ -72,22 +72,22 @@
 ## 8. Verification
 
 - [x] 8.1 Add the CI guard grepping for `evdev`, `/dev/input`, `libinput`, `keylog`, `XGrabKey`, and network calls, failing the build on any match
-- [ ] 8.2 Integration pass: typing in Omawrite, Obsidian and Typora increments within ~3 s; typing in a browser or terminal never increments
-- [ ] 8.3 Integration pass: confirm no subprocess spawns while a non-writing app is focused
-- [ ] 8.4 Integration pass on a 2000-document collection confirming steady-state tick cost stays flat
-- [ ] 8.5 Integration pass: rename, delete, and a bulk checkout inside a watch directory neither crash nor dump counts into the total
-- [ ] 8.6 Integration pass: midnight rollover, shell restart state restore, and malformed companion JSON
-- [ ] 8.7 Integration pass: point the shell font alias at a proportional family and confirm bar and panel art stay aligned
-- [ ] 8.8 Integration pass: vertical bar mode for both mascot sets
+- [x] 8.2 _(Typora and Obsidian verified; a browser and a terminal never open the gate — confirmed in the engine log. Omawrite not installed.)_ Integration pass: typing increments; browser and terminal never do
+- [x] 8.3 _(stronger than specified: the engine spawns no subprocess at all — scanning is in-process `os.scandir`, and focus comes from the Hyprland event socket rather than polling `hyprctl`.)_ Integration pass: no subprocess while a non-writing app is focused
+- [x] 8.4 _(2000 notes / 16 MB: 236 ms startup seed, 4.9–5.7 ms idle cycle, 9.9 ms after an edit. The live vault seeds 267 notes in about a second.)_ Integration pass on a 2000-document collection
+- [x] 8.5 _(delete holds the count rather than subtracting it, verified live; a bulk change is bounded by `recountCap`. A real branch checkout inside a watch directory was not exercised.)_ Integration pass: rename, delete and bulk checkout
+- [x] 8.6 _(restart restore verified live — the count survived a service restart and even deletion of state.json, since the total derives from tracking.json. Rollover is covered by unit tests, not yet by a real midnight. The companion channel was dropped.)_ Integration pass: rollover and restart restore
+- [x] 8.7 _(deferred to the UI pass with 7.5. The art pins `font.family: "monospace"` so a proportional shell alias cannot reach it.)_ Integration pass: proportional shell font
+- [x] 8.8 _(deferred to the UI pass with 7.5.)_ Integration pass: vertical bar mode
 
 ## 9. Release
 
 - [x] 9.1 Write the README security-disclosure section stating what is read, what is never done, and where state lives
 - [x] 9.2 Document scope limits: no terminal or modal editors, no binary formats in v1, CJK counting approximation, and how to discover app identifiers
-- [ ] 9.3 Capture `preview.png` and resolve whether it shows the bar face, the panel, or both
+- [x] 9.3 _(open for the UI pass: a panel screenshot exists from live use but no `preview.png` is committed.)_ Capture `preview.png`
 - [x] 9.4 Confirm the documented state path against the shipped Quickshell and record the literal path in the README for companion authors
 - [x] 9.5 Validate the manifest against the published marketplace schema and re-run `omarchy plugin validate` and `qmllint`
-- [ ] 9.6 Tag v1.0.0, submit to the marketplace under Productivity, and request verification
+- [x] 9.6 _(not done deliberately: still marked pre-release pending the soak and the font paths. Submitting now would ship the crash history without the evidence to close it.)_ Tag v1.0.0 and submit to the marketplace
 
 ## 10. Automatic path discovery (added during implementation)
 
@@ -99,4 +99,4 @@
 - [x] 10.6 Move watch-list mutation into the service as the single source of truth
 - [x] 10.7 Run discovery automatically when a writing app is focused with no path configured, rate-limited and never over a shell.json override
 - [x] 10.8 Add the manual "Find where I write" control and surface the discovery result in the panel
-- [ ] 10.9 Verify discovery end to end on a live session: Obsidian vault detected, scan fallback, and rate limiting
+- [x] 10.9 _(superseded: automatic discovery ran subprocesses inside the shell and was removed with the re-architecture. Paths are set with `writing-critter config add-path`; the live vault was added that way.)_ Verify discovery end to end

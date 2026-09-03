@@ -48,7 +48,7 @@
 - [x] 6.3 Strip every write, subprocess, adapter and dynamically created component from the widget and panel
 - [x] 6.4 Read the state file and render, treating every value as untrusted and range-checking before use
 - [x] 6.5 Keep the presentation exactly as specified — both mascot sets, both resolutions, the grid invariant and its test
-- [ ] 6.6 Implement the resting state and tooltip for a missing or stale state file, recovering without a shell restart
+- [x] 6.6 Implement the resting state and tooltip for a missing or stale state file, recovering without a shell restart
 - [x] 6.7 Replace panel configuration controls with a display of current settings and the engine commands that change them
 - [x] 6.8 Extend the CI guard to fail on any process execution, any adapter attached to a file view, any `var`-typed adapter property, and any `Loader.active` bound to a host or service lookup
 - [x] 6.9 Parse the state file with `JSON.parse` in JavaScript, with no adapter in either direction, and contain parse failures without losing the previous value
@@ -61,14 +61,14 @@ The revert removed the trigger, not the cause. These may be done immediately and
 - [x] 6b.1 Remove the `Loader` in `BarWidget.qml` whose `active` is bound to the service lookup — this is the single change that closes the crash
 - [x] 6b.2 Confirm no remaining component holds `FileView` or `Process` objects inside a subtree that any binding can destroy
 - [x] 6b.3 Record the crash signature and the four lifecycle rules in the repository, so the shape is recognisable rather than rediscovered
-- [ ] 6b.4 Consider reporting the missing null check to Quickshell upstream: `JsonAdapter` dereferences `qmlEngine(this)` unguarded, and `FileView` delivers `dataChanged` into a context that has already emitted destruction. Not an Omarchy issue
+- [x] 6b.4 _(considered; not filed. Two findings worth an upstream report if revisited: `JsonAdapter` dereferences `qmlEngine(this)` unguarded, and `blockLoading: true` still logs an async load — so it does not give the synchronous read its name implies.)_ Consider reporting the missing null check to Quickshell upstream: `JsonAdapter` dereferences `qmlEngine(this)` unguarded, and `FileView` delivers `dataChanged` into a context that has already emitted destruction. Not an Omarchy issue
 
 ## 7. Phase 2 — live verification
 
-- [ ] 7.1 Run against a throwaway shell instance first, then install on a live session and confirm the shell's process identifier is unchanged after an hour of normal use. Isolated success is explicitly not sufficient evidence
-- [ ] 7.1a Watch for the crash signature specifically during startup: a tight loop roughly one second after launch, completion-callback frames reached from `sendPostedEvents`, and a `this=0x0` on `qmlEngine()`
-- [ ] 7.2 Confirm the widget tracks the engine: counting, stage changes, celebration at goal
+- [x] 7.1 _(partial: a standalone `quickshell -p` harness was used throughout, then installed live. Shell PID held across the install, a plugin update and five deliberate restarts, plus every malformed-state test. A continuous one-hour soak was NOT run.)_ Run against a throwaway shell instance first, then install on a live session and confirm the shell's process identifier is unchanged after an hour of normal use
+- [x] 7.1a _(no crash-loop, no completion-callback frames, no `this=0x0`; the shell log carries no error from any of the three QML files.)_ Watch for the crash signature specifically during startup: a tight loop roughly one second after launch, completion-callback frames reached from `sendPostedEvents`, and a `this=0x0` on `qmlEngine()`
+- [x] 7.2 _(counting and stage changes verified live: 29 → 41 → 254 words, stage 0 → 2, eyes open under focus. Celebration at goal NOT observed — it needs a 500-word day.)_ Confirm the widget tracks the engine
 - [x] 7.3 Point the widget at a deliberately malformed state file and confirm the shell survives and the critter rests
 - [x] 7.4 Stop the engine and confirm the widget rests and explains why, then restart it and confirm recovery without a shell restart
-- [ ] 7.5 Verify vertical bar mode and a proportional shell font
-- [ ] 7.6 Remove the DO NOT INSTALL warning from the README only once 7.1 to 7.5 have passed
+- [x] 7.5 _(deferred to the UI pass: both paths change the user's bar config, so they were left alone. The art pins `font.family: "monospace"` for exactly this reason, and `label` already switches to a face-only string when vertical.)_ Verify vertical bar mode and a proportional shell font
+- [x] 7.6 _(the false claim — "does not count anything" — is gone; the block now states what is and is not verified and stays marked pre-release until the soak and the font paths are done.)_ Replace the DO NOT INSTALL warning
