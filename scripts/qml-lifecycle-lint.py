@@ -4,6 +4,11 @@
 Those rules exist because breaking them segfaulted the desktop shell in a crash
 loop. Each of the four contributing conditions was individually defensible, so
 review did not catch the combination. A linter does.
+
+Scope: this is line-oriented, not a QML parser. Rules 1 and 2 match a property
+on its own line, which is how every QML file here is written; a violation
+squeezed onto one line with its enclosing brace would slip through. Verified by
+probing each rule with a deliberate violation rather than trusting a clean run.
 """
 import re
 import sys
@@ -59,9 +64,54 @@ def check(path: Path) -> None:
                 f"    branch that dereferences the QML engine."
             )
 
+        # Rule 3: the shell process runs no subprocesses. Counting lives in the
+        # engine; a Process here is the architecture leaking back in.
+        if re.match(r"^Process\s*\{", stripped) or re.search(r"\b(startDetached|exec)\s*\(", stripped):
+            failures.append(
+                f"{path.name}:{lineno}: process execution in the shell.\n"
+                f"    All subprocess work belongs in bin/writing-critter (rule 3)."
+            )
+
+        # Rule 4: the widget never writes. The engine is the only writer, and a
+        # write path out of the shell is what the crash was reached through.
+        if re.search(r"\b(setText|writeAdapter|setData)\s*\(", stripped) or stripped.startswith("atomicWrites:"):
+            failures.append(
+                f"{path.name}:{lineno}: a write from the shell process.\n"
+                f"    state.json and config.json have exactly one writer, the engine (rule 4)."
+            )
+
         depth += line.count("{") - line.count("}")
         while depth_stack and depth <= depth_stack[-1][1]:
             depth_stack.pop()
+
+
+def check_blocking_reads(path: Path) -> None:
+    """Rule 5: every FileView reads synchronously.
+
+    An async read that completes after its context is destroyed is the crash in
+    docs/POSTMORTEM-ORPHANED-READ.md. A blocking read cannot be in flight during
+    a teardown, so this is the property that makes the widget structurally safe
+    rather than merely careful. It is affordable because state.json is tiny.
+    """
+    text = path.read_text()
+    for match in re.finditer(r"FileView\s*\{", text):
+        start = match.end()
+        depth = 1
+        i = start
+        while i < len(text) and depth:
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+            i += 1
+        body = text[start:i]
+        if not re.search(r"^\s*blockLoading:\s*true\s*$", body, re.M):
+            lineno = text[:match.start()].count("\n") + 1
+            failures.append(
+                f"{path.name}:{lineno}: FileView without `blockLoading: true`.\n"
+                f"    A read still in flight when the subtree is destroyed is the crash\n"
+                f"    we shipped once (rule 5)."
+            )
 
 
 qml = sorted(ROOT.glob("*.qml"))
@@ -71,6 +121,7 @@ if not qml:
 
 for f in qml:
     check(f)
+    check_blocking_reads(f)
 
 if failures:
     print("qml-lifecycle-lint: FAILED\n", file=sys.stderr)

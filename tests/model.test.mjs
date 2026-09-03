@@ -113,3 +113,116 @@ const validSource = (over = {}) => JSON.stringify({
   wordsAddedToday: 342, updatedAt: "2026-09-02T10:42:13+02:00",
   claimsPaths: ["/home/u/Vault"], ...over
 });
+
+// ------------------------------------------------------- untrusted state
+//
+// The state file comes from another process. These cover what a reader is
+// allowed to believe, per docs/STATE-FILE.md.
+
+const good = JSON.stringify({
+  schema: 1, wordsToday: 120, goal: 500, gateOpen: true,
+  updatedAt: 1788428966, mascot: "bird", byOrigin: { filewatch: 120 }
+});
+
+test("a well-formed payload loads", () => {
+  const s = M.parseState(good, null);
+  assert.equal(s.wordsToday, 120);
+  assert.equal(s.goal, 500);
+  assert.equal(s.gateOpen, true);
+  assert.equal(s.everLoaded, true);
+  assert.equal(s.restingReason, "");
+});
+
+test("a missing file rests rather than showing zero as if counted", () => {
+  const s = M.parseState(null, null);
+  assert.equal(s.everLoaded, false);
+  assert.equal(s.restingReason, M.RESTING.stopped);
+});
+
+test("torn JSON keeps the last good render", () => {
+  const loaded = M.parseState(good, null);
+  const torn = M.parseState('{"schema":1,"wordsTod', loaded);
+  assert.equal(torn.wordsToday, 120, "a bad tick must not blank the bar");
+  assert.equal(torn.everLoaded, true);
+});
+
+test("garbage before anything loaded rests, and says why", () => {
+  const s = M.parseState("not json at all", null);
+  assert.equal(s.everLoaded, false);
+  assert.equal(s.restingReason, M.RESTING.unreadable);
+});
+
+test("a JSON array is not a state object", () => {
+  const s = M.parseState("[1,2,3]", null);
+  assert.equal(s.everLoaded, false);
+  assert.equal(s.restingReason, M.RESTING.malformed);
+});
+
+test("an unknown schema refuses to guess", () => {
+  const s = M.parseState(JSON.stringify({ schema: 2, wordsToday: 999 }), null);
+  assert.equal(s.everLoaded, false);
+  assert.equal(s.restingReason, M.RESTING.version);
+  assert.equal(s.wordsToday, 0, "numbers from an unreadable layout must not render");
+});
+
+test("hostile numbers are clamped, not trusted", () => {
+  const s = M.parseState(JSON.stringify({
+    schema: 1, wordsToday: -5, goal: 0, updatedAt: "soon", gateOpen: "yes"
+  }), null);
+  assert.equal(s.wordsToday, 0, "negative words cannot render a negative bar");
+  assert.equal(s.goal, 1, "a zero goal would divide by zero in progress");
+  assert.equal(s.updatedAt, 0, "a non-numeric timestamp is no timestamp");
+  assert.equal(s.gateOpen, false, "only a real boolean opens the gate");
+});
+
+test("a wrong-typed field falls back without discarding the others", () => {
+  const s = M.parseState(JSON.stringify({
+    schema: 1, wordsToday: "many", goal: 800, gateOpen: true
+  }), null);
+  assert.equal(s.goal, 800, "one bad field must not lose the good ones");
+  assert.equal(s.wordsToday, 0);
+});
+
+test("an unknown mascot keeps the current one", () => {
+  const loaded = M.parseState(good, null);
+  const s = M.parseState(JSON.stringify({ schema: 1, mascot: "dragon" }), loaded);
+  assert.equal(s.mascot, "bird");
+  assert.ok(M.MASCOTS[s.mascot], "the render must always have a real mascot set");
+});
+
+test("byOrigin drops entries that are not counts", () => {
+  const s = M.parseState(JSON.stringify({
+    schema: 1, byOrigin: { filewatch: 40, bogus: "lots", negative: -3 }
+  }), null);
+  assert.equal(s.byOrigin.filewatch, 40);
+  assert.ok(!("bogus" in s.byOrigin));
+  assert.equal(s.byOrigin.negative, 0);
+});
+
+test("no note path can reach the widget through the contract", () => {
+  const s = M.parseState(JSON.stringify({
+    schema: 1, wordsToday: 5, tracking: { "/home/me/secret diary.md": [0, 5, 5] }
+  }), null);
+  assert.ok(!("tracking" in s), "tracking is engine bookkeeping, never rendered");
+  assert.equal(JSON.stringify(s).indexOf("secret diary"), -1);
+});
+
+test("history drops entries that are not days", () => {
+  const s = M.parseState(JSON.stringify({
+    schema: 1,
+    history: [
+      { date: "2026-09-01", words: 980, goal: 500 },
+      { date: "2026-09-02", words: "lots", goal: 500 },
+      { words: 100, goal: 500 },
+      null,
+      { date: "2026-09-03", words: 12, goal: 500 }
+    ]
+  }), null);
+  assert.deepEqual(s.history.map(d => d.date), ["2026-09-01", "2026-09-03"]);
+});
+
+test("history is an array even when the field is junk", () => {
+  const s = M.parseState(JSON.stringify({ schema: 1, history: "yesterday" }), null);
+  assert.ok(Array.isArray(s.history));
+  assert.equal(s.history.length, 0);
+});

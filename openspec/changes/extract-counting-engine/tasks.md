@@ -43,16 +43,16 @@
 
 ## 6. Phase 2 — widget, gated on the crash diagnosis
 
-- [ ] 6.1 Apply the diagnosed lifecycle rules as the design constraint for every item in this group: no lifetime binding on a late-settling value, no async work inside a destroyable subtree, no retry timer inside what it retries, one stable owner for shared reads. File-change signals are permitted — teardown was the fault, not the read
+- [x] 6.1 Apply the diagnosed lifecycle rules as the design constraint for every item in this group: no lifetime binding on a late-settling value, no async work inside a destroyable subtree, no retry timer inside what it retries, one stable owner for shared reads. File-change signals are permitted — teardown was the fault, not the read
 - [x] 6.2 Delete `Service.qml` and remove the service kind from the manifest _(pulled forward into 6b: the lifecycle lint flagged its JsonAdapter, and deleting the dead file was the honest fix rather than suppressing the warning)_
-- [ ] 6.3 Strip every write, subprocess, adapter and dynamically created component from the widget and panel
-- [ ] 6.4 Read the state file and render, treating every value as untrusted and range-checking before use
-- [ ] 6.5 Keep the presentation exactly as specified — both mascot sets, both resolutions, the grid invariant and its test
+- [x] 6.3 Strip every write, subprocess, adapter and dynamically created component from the widget and panel
+- [x] 6.4 Read the state file and render, treating every value as untrusted and range-checking before use
+- [x] 6.5 Keep the presentation exactly as specified — both mascot sets, both resolutions, the grid invariant and its test
 - [ ] 6.6 Implement the resting state and tooltip for a missing or stale state file, recovering without a shell restart
-- [ ] 6.7 Replace panel configuration controls with a display of current settings and the engine commands that change them
-- [ ] 6.8 Extend the CI guard to fail on any process execution, any adapter attached to a file view, any `var`-typed adapter property, and any `Loader.active` bound to a host or service lookup
-- [ ] 6.9 Parse the state file with `JSON.parse` in JavaScript, with no adapter in either direction, and contain parse failures without losing the previous value
-- [ ] 6.10 Ensure exactly one owner performs file reads and holds timers, so a multi-monitor bar does not create several readers or several teardowns
+- [x] 6.7 Replace panel configuration controls with a display of current settings and the engine commands that change them
+- [x] 6.8 Extend the CI guard to fail on any process execution, any adapter attached to a file view, any `var`-typed adapter property, and any `Loader.active` bound to a host or service lookup
+- [x] 6.9 Parse the state file with `JSON.parse` in JavaScript, with no adapter in either direction, and contain parse failures without losing the previous value
+- [x] 6.10 Ensure exactly one owner performs file reads and holds timers, so a multi-monitor bar does not create several readers or several teardowns
 
 ## 6b. Close the hazard that is live at HEAD
 

@@ -40,7 +40,7 @@ falling back to `~/.local/state/writing-critter/state.json` when
 | `history` | Recent finished days, oldest first, capped at 365. |
 | `mascot` | Which mascot set the user chose. |
 | `gateOpen` | Whether counting is currently active — a writing app is focused, or was within the grace window. |
-| `updatedAt` | Unix seconds of the last write. This is how you detect a stopped engine. |
+| `updatedAt` | Unix seconds of the last write. This is how you detect a stopped engine. A running engine refreshes it at least every 30 seconds even when nothing is being written, so treat silence beyond about 90 seconds as stopped. |
 
 Per-file bookkeeping lives in a sibling `tracking.json`, not here. It is the
 bulk of the data — on a 267-note vault it was 99% of a combined file — and it

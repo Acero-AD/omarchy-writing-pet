@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Engine tests. Standard library only, no desktop, no shell, no network."""
 
+import argparse
 import importlib.machinery
 import importlib.util
 import os
@@ -156,6 +157,40 @@ class TestConfigCommands(TempConfig):
         self.run_cli("config", "add-app", "kate")
         reloaded = engine.Config.load(self.path)
         reloaded.validate()  # must not raise: what we write, we can read
+
+
+class TestScalarSettings(TempConfig):
+    """The panel displays these and cannot change them, so the CLI must."""
+
+    def _run(self, action, value):
+        # Through main(), which is the path a user actually takes: it is what
+        # turns a ConfigError into an exit code instead of a traceback.
+        return engine.main(["--config", str(self.path), "config", action, value])
+
+    def test_set_goal_and_mascot_persist(self):
+        self.write(json.dumps({"watch": ["/tmp"]}))
+        self.assertEqual(self._run("set-goal", "800"), 0)
+        self.assertEqual(self._run("set-mascot", "snail"), 0)
+        saved = engine.Config.load(self.path)
+        self.assertEqual(saved.values["goal"], 800)
+        self.assertEqual(saved.values["mascot"], "snail")
+
+    def test_a_bad_goal_is_refused_without_writing(self):
+        self.write(json.dumps({"watch": ["/tmp"], "goal": 500}))
+        self.assertEqual(self._run("set-goal", "abc"), 1)
+        self.assertNotEqual(self._run("set-goal", "0"), 0,
+                            "a zero goal must be refused, not saved")
+        self.assertEqual(engine.Config.load(self.path).values["goal"], 500)
+
+    def test_an_unknown_mascot_is_refused(self):
+        self.write(json.dumps({"watch": ["/tmp"]}))
+        self.assertEqual(self._run("set-mascot", "dragon"), 1)
+        self.assertEqual(engine.Config.load(self.path).values["mascot"], "bird")
+
+    def test_a_mascot_the_widget_cannot_draw_never_loads(self):
+        self.write(json.dumps({"watch": ["/tmp"], "mascot": "dragon"}))
+        with self.assertRaises(engine.ConfigError):
+            engine.Config.load(self.path)
 
 
 class TestStateReading(unittest.TestCase):

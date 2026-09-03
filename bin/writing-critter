@@ -45,6 +45,14 @@ TRACKING_PATH = STATE_PATH.with_name("tracking.json")
 
 # ----------------------------------------------------------------- config
 
+# Kept in step with MASCOTS in Model.js. The widget falls back on an unknown
+# mascot rather than rendering nothing, but there is no reason to write one.
+MASCOTS = ("bird", "snail")
+
+# How often an idle engine refreshes updatedAt so readers can tell it is alive.
+# Readers treat silence past ~90s as stopped; see docs/STATE-FILE.md.
+HEARTBEAT_SECONDS = 30
+
 DEFAULTS: dict[str, Any] = {
     "goal": 500,
     "watch": [],
@@ -113,6 +121,8 @@ class Config:
         v = self.values
         if not isinstance(v["goal"], int) or v["goal"] < 1:
             raise ConfigError(f"{self.path}: 'goal' must be a positive integer")
+        if v["mascot"] not in MASCOTS:
+            raise ConfigError(f"{self.path}: 'mascot' must be one of {', '.join(MASCOTS)}")
         for key in ("watch", "extensions", "whitelist"):
             if not isinstance(v[key], list) or not all(isinstance(x, str) for x in v[key]):
                 raise ConfigError(f"{self.path}: '{key}' must be a list of strings")
@@ -501,7 +511,10 @@ class Engine:
         self.words = self.tracker.total()
         self.check_rollover()
 
-    def write_state(self) -> None:
+    def write_state(self, include_tracking: bool = True) -> None:
+        """Publish state. `include_tracking` is False for a heartbeat, which
+        only needs to refresh updatedAt: the bookkeeping file is the large one
+        and rewriting it every half minute buys nothing."""
         payload = {
             "schema": 1,
             "date": self.today,
@@ -514,8 +527,9 @@ class Engine:
             "updatedAt": time.time(),
         }
         write_atomic(self.state_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        write_atomic(self.tracking_path,
-                     json.dumps(self.tracker.to_json(), indent=2, sort_keys=True) + "\n")
+        if include_tracking:
+            write_atomic(self.tracking_path,
+                         json.dumps(self.tracker.to_json(), indent=2, sort_keys=True) + "\n")
 
     def check_rollover(self, today: str | None = None) -> bool:
         today = local_date() if today is None else today
@@ -616,6 +630,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # changed - so without this the state looks stale from every restart until
     # the user happens to type, and the critter reads as dead while it is fine.
     engine.write_state()
+    last_publish = time.time()
     log("engine.ready", goal=config.values["goal"], paths=len(config.watch_paths),
         poll=config.poll_seconds, lookback=config.lookback_seconds)
 
@@ -655,6 +670,15 @@ def cmd_run(args: argparse.Namespace) -> int:
                         engine.seed_baselines()
                 if engine.refresh_gate():
                     engine.cycle()
+                    last_publish = time.time()
+                # A cycle only publishes when a file changed, so a reader
+                # watching updatedAt would call a healthy but idle engine
+                # "stopped" within a couple of minutes of the last word. The
+                # heartbeat is what makes that field mean what the contract
+                # says it means. State is tiny; tracking is not, and is skipped.
+                elif time.time() - last_publish >= HEARTBEAT_SECONDS:
+                    engine.write_state(include_tracking=False)
+                    last_publish = time.time()
     except ConnectionError as exc:
         log("engine.stop", reason=exc)
         return 1
@@ -714,6 +738,31 @@ def cmd_config(args: argparse.Namespace) -> int:
         print(config.path)
         return 0
 
+    # Scalars. The bar panel displays these but cannot change them: the engine
+    # owns its config file, and a second writer is how settings get lost.
+    if args.config_action == "set-goal":
+        try:
+            goal = int(args.value)
+        except ValueError:
+            print(f"goal must be a whole number of words, not {args.value!r}", file=sys.stderr)
+            return 1
+        config.values["goal"] = goal
+        config.validate()
+        config.save()
+        print(f"goal: {goal} words/day")
+        return 0
+
+    if args.config_action == "set-mascot":
+        known = sorted(MASCOTS)
+        if args.value not in known:
+            print(f"unknown mascot {args.value!r}; choose from: {', '.join(known)}", file=sys.stderr)
+            return 1
+        config.values["mascot"] = args.value
+        config.validate()
+        config.save()
+        print(f"mascot: {args.value}")
+        return 0
+
     key = {"add-path": "watch", "remove-path": "watch",
            "add-app": "whitelist", "remove-app": "whitelist"}[args.config_action]
     value = args.value
@@ -761,7 +810,8 @@ def build_parser() -> argparse.ArgumentParser:
     cfgsub.add_parser("show", help="print the effective configuration")
     cfgsub.add_parser("path", help="print the config file path")
     for action, meta in (("add-path", "DIR"), ("remove-path", "DIR"),
-                         ("add-app", "APPID"), ("remove-app", "APPID")):
+                         ("add-app", "APPID"), ("remove-app", "APPID"),
+                         ("set-goal", "WORDS"), ("set-mascot", "NAME")):
         sp = cfgsub.add_parser(action, help=f"{action.replace('-', ' ')}")
         sp.add_argument("value", metavar=meta)
     return p

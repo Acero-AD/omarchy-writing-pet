@@ -233,6 +233,131 @@ function statusPhrase(stage, mood) {
 
 // ----------------------------------------------------------------- exports
 
+
+// ------------------------------------------------------- untrusted state
+//
+// The state file is written by a separate process, so it is parsed as
+// untrusted input: every field is type- and range-checked, one bad field never
+// discards the rest, and a failure keeps the previous values rather than
+// blanking a critter that was rendering fine a moment ago.
+//
+// Pure so it can be tested under `node --test`. StateSource.qml holds the
+// FileView; this decides what a payload is allowed to mean.
+
+var STATE_SCHEMA = 1;
+var WORD_MAX = 10000000;
+
+function clampInt(value, min, max, fallback) {
+  if (typeof value !== "number" || !isFinite(value)) return fallback;
+  var n = Math.floor(value);
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
+}
+
+var RESTING = {
+  never: "waiting for the engine",
+  unreadable: "state file unreadable",
+  malformed: "state file malformed",
+  version: "engine state version not supported",
+  stopped: "engine not running"
+};
+
+function defaultState() {
+  return {
+    wordsToday: 0,
+    goal: 500,
+    mascot: MASCOT_DEFAULT,
+    gateOpen: false,
+    updatedAt: 0,
+    byOrigin: {},
+    history: [],
+    everLoaded: false,
+    restingReason: RESTING.never
+  };
+}
+
+// Returns the next state given a raw file body and the state currently shown.
+function parseState(raw, previous) {
+  var prev = previous || defaultState();
+  var next = {
+    wordsToday: prev.wordsToday,
+    goal: prev.goal,
+    mascot: prev.mascot,
+    gateOpen: prev.gateOpen,
+    updatedAt: prev.updatedAt,
+    byOrigin: prev.byOrigin,
+    history: prev.history || [],
+    everLoaded: prev.everLoaded,
+    restingReason: prev.restingReason
+  };
+
+  if (raw === null || raw === undefined || String(raw).length === 0) {
+    next.everLoaded = false;
+    next.restingReason = RESTING.stopped;
+    return next;
+  }
+
+  var parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    // A torn read, though the engine writes atomically. Hold the last good
+    // render; do not blank the bar over one bad tick.
+    next.restingReason = prev.everLoaded ? "" : RESTING.unreadable;
+    return next;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    next.restingReason = prev.everLoaded ? "" : RESTING.malformed;
+    return next;
+  }
+  if (parsed.schema !== STATE_SCHEMA) {
+    // A newer engine with a layout we do not understand. Rendering its numbers
+    // under our assumptions would be worse than resting.
+    next.everLoaded = false;
+    next.restingReason = RESTING.version;
+    return next;
+  }
+
+  next.wordsToday = clampInt(parsed.wordsToday, 0, WORD_MAX, prev.wordsToday);
+  next.goal = clampInt(parsed.goal, 1, WORD_MAX, prev.goal);
+  next.gateOpen = parsed.gateOpen === true;
+  next.updatedAt = (typeof parsed.updatedAt === "number" && isFinite(parsed.updatedAt))
+    ? parsed.updatedAt : 0;
+
+  // An unknown mascot keeps the current one rather than rendering nothing.
+  if (MASCOTS[parsed.mascot]) next.mascot = parsed.mascot;
+
+  var origins = {};
+  if (parsed.byOrigin && typeof parsed.byOrigin === "object" && !Array.isArray(parsed.byOrigin)) {
+    for (var key in parsed.byOrigin) {
+      if (!Object.prototype.hasOwnProperty.call(parsed.byOrigin, key)) continue;
+      var n = clampInt(parsed.byOrigin[key], 0, WORD_MAX, -1);
+      if (n >= 0) origins[key] = n;
+    }
+  }
+  next.byOrigin = origins;
+
+  // Finished days, oldest first. An entry missing a date or a sane count is
+  // dropped rather than rendered as a gap.
+  var history = [];
+  if (Array.isArray(parsed.history)) {
+    for (var i = 0; i < parsed.history.length; i++) {
+      var entry = parsed.history[i];
+      if (!entry || typeof entry !== "object" || typeof entry.date !== "string") continue;
+      var words = clampInt(entry.words, 0, WORD_MAX, -1);
+      var dayGoal = clampInt(entry.goal, 1, WORD_MAX, -1);
+      if (words < 0 || dayGoal < 0) continue;
+      history.push({ date: entry.date, words: words, goal: dayGoal });
+    }
+  }
+  next.history = history;
+
+  next.everLoaded = true;
+  next.restingReason = "";
+  return next;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     STAGE_COUNT: STAGE_COUNT,
@@ -250,6 +375,11 @@ if (typeof module !== "undefined" && module.exports) {
     mascotIds: mascotIds,
     barFace: barFace,
     panelArt: panelArt,
-    statusPhrase: statusPhrase
+    statusPhrase: statusPhrase,
+    STATE_SCHEMA: STATE_SCHEMA,
+    RESTING: RESTING,
+    clampInt: clampInt,
+    defaultState: defaultState,
+    parseState: parseState
   };
 }
