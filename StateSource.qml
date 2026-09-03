@@ -78,13 +78,25 @@ Singleton {
     // never tell, so staleness closes the gate as firmly as a lost focus does.
     readonly property bool counting: live && gateOpen
 
-    // One timer for the whole bar. Mood decays on a minute scale, so five
-    // seconds is ample and costs nothing.
+    // One timer for the whole bar, doing both the re-read and the clock.
+    //
+    // This polls rather than relying on watchChanges, and it must: the engine
+    // publishes with a temp file and a rename, so every write swaps in a new
+    // inode and leaves the watch holding the old, unlinked one. onFileChanged
+    // then never fires and the critter sits on its first reading forever --
+    // measured, not assumed. Atomic writes are not negotiable (a reader must
+    // never see a torn file), so the reader polls instead.
+    //
+    // A blocking 210-byte read every two seconds is free, and matches the
+    // engine's own cadence so the bar is never more than a tick behind.
     Timer {
-        interval: 5000
+        interval: 2000
         running: true
         repeat: true
-        onTriggered: root.nowMs = Date.now()
+        onTriggered: {
+            root.nowMs = Date.now();
+            root.readNow();
+        }
     }
 
     // --------------------------------------------------------------- parse
@@ -140,6 +152,9 @@ Singleton {
     function readNow() {
         var raw = null;
         try {
+            // reload() re-reads from the path rather than returning the cached
+            // body, which is the whole point when the inode has been replaced.
+            stateFile.reload();
             raw = stateFile.text();
         } catch (e) {
             raw = null;

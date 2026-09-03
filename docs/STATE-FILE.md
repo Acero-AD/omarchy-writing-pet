@@ -64,9 +64,19 @@ parse fails anyway, keep your last good value and retry. Never crash.
 renders inside a long-lived shell process must not be the reason that process
 dies.
 
-**5. Detect staleness from `updatedAt`.** More than **60 seconds** old means the
-engine is not running. Say so rather than showing a frozen count as if it were
-live.
+**5. Detect staleness from `updatedAt`.** A running engine refreshes it at least
+every **30 seconds**, even when nothing is being written, so treat more than
+**90 seconds** as stopped. Say so rather than showing a frozen count as if it
+were live.
+
+**6. Poll. Do not rely on a file watch.** Writes are atomic — temp file plus
+rename — so every publish swaps in a **new inode** and leaves an inotify watch
+holding the old, unlinked one. A watch on the path therefore fires once, if at
+all, and then never again: the reader sits on its first reading forever while
+the file changes underneath it. This is measured, not theoretical; it is how the
+bar widget first shipped. Re-read on a timer instead. The file is a couple of
+hundred bytes, so a two-second poll costs nothing, and the whole reason it is
+that small is to make polling free.
 
 ## Deriving what to draw
 
