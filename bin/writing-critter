@@ -431,6 +431,7 @@ class Engine:
         """Record a focus change. Returns True if the gate state changed."""
         now = time.time() if now is None else now
         was_open = self._gate_open
+        moved = app_id != self.focused_app
         self.focused_app = app_id
         if self.writing_focused():
             self.last_writing_at = now
@@ -438,7 +439,13 @@ class Engine:
         if self._gate_open != was_open:
             self.log("gate." + ("open" if self._gate_open else "closed"), app=app_id or "(none)")
             return True
-        self.log("focus.change", app=app_id or "(none)", gate="open" if self._gate_open else "closed")
+        # Hyprland re-emits activewindow on title changes, and editors rewrite
+        # their title as you type. Only an actual change of app is worth a line.
+        if moved:
+            state = "open" if self._gate_open else "closed"
+            if self._gate_open and not self.writing_focused():
+                state = "open (grace)"
+            self.log("focus.change", app=app_id or "(none)", gate=state)
         return False
 
     def refresh_gate(self, now: float | None = None) -> bool:

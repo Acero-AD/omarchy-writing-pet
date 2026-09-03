@@ -37,7 +37,7 @@
 
 - [x] 5.1 Add a systemd user unit with restart-on-failure, and an install command that enables it
 - [x] 5.2 Extend the CI security guard to cover the engine: no input capture, no network, no privilege escalation, and the external-command allowlist
-- [ ] 5.3 **Verification gate: run the engine in a terminal and confirm it counts real writing in a real editor** — words appear within a few seconds of saving, a browser and a terminal never increment, and no subprocess spawns while the gate is closed
+- [x] 5.3 **Verification gate: run the engine in a terminal and confirm it counts real writing in a real editor** — words appear within a few seconds of saving, a browser and a terminal never increment, and no subprocess spawns while the gate is closed
 - [x] 5.4 Verify rollover, engine restart, a malformed config, and a missing watch path all behave as specified
 - [x] 5.5 Verify cost stays flat on a 2000-document collection, asserting on rows returned and not on elapsed time alone
 

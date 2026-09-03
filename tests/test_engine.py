@@ -446,5 +446,40 @@ class TestRolloverAndResilience(TempConfig):
             self.assertIn(field, payload, f"docs/STATE-FILE.md promises '{field}'")
         self.assertEqual(payload["schema"], 1)
         self.assertEqual(payload["wordsToday"], 42)
+class TestFocusLogging(TempConfig):
+    def _engine(self):
+        self.write(json.dumps({"watch": ["/tmp"], "graceSeconds": 15}))
+        lines = []
+        e = engine.Engine(engine.Config.load(self.path),
+                          lambda ev, **kw: lines.append((ev, kw)))
+        return e, lines
+
+    def test_repeated_events_for_the_same_app_log_once(self):
+        e, lines = self._engine()
+        for _ in range(5):
+            e.set_focus("typora", now=1000.0)
+        events = [ev for ev, _ in lines]
+        self.assertEqual(events.count("gate.open"), 1)
+        self.assertEqual(events.count("focus.change"), 0,
+                         "a title change is not a focus change")
+
+    def test_an_actual_app_change_still_logs(self):
+        e, lines = self._engine()
+        e.set_focus("typora", now=1000.0)
+        e.set_focus("foot", now=1001.0)
+        e.set_focus("foot", now=1002.0)
+        changes = [kw for ev, kw in lines if ev == "focus.change"]
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["app"], "foot")
+
+    def test_grace_is_named_in_the_line(self):
+        e, lines = self._engine()
+        e.set_focus("typora", now=1000.0)
+        e.set_focus("foot", now=1001.0)
+        changes = [kw for ev, kw in lines if ev == "focus.change"]
+        self.assertEqual(changes[0]["gate"], "open (grace)",
+                         "the terminal did not open the gate; the grace window did")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
