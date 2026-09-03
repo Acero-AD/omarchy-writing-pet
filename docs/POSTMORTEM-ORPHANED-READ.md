@@ -102,3 +102,20 @@ configuration plays no part.
 But the trigger is avoidable in plugin code, and a plugin that crashes the shell
 it runs inside owns the problem regardless of who holds the missing null check.
 Rules 1 and 2 are what keep it from happening again.
+
+## Correction, 2026-09-03
+
+The Phase 2 rewrite claimed `blockLoading: true` made `FileView` reads
+synchronous, and therefore made teardown safe on its own. That is false.
+Quickshell logs `Starting async load` for a `FileView` with `blockLoading` set;
+the reads are still asynchronous.
+
+What actually closes the hazard is ownership: every `FileView` is held by a
+`Singleton`, which lives for the process and cannot be destroyed by a binding, a
+`Variants` model change, or a monitor hotplug. An in-flight read has nothing to
+outlive. `blockLoading` is kept for a smaller reason — it makes the first
+`text()` return data rather than an empty string.
+
+Recorded because a comment asserting a guarantee the code does not provide is
+worse than no comment: it invites exactly the reasoning that caused the original
+crash.

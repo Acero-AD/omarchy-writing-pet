@@ -16,10 +16,11 @@ import "Model.js" as Model
 //     mean N readers and, worse, N teardowns on a monitor hotplug.
 //   * Nothing creates or destroys it from a binding. A singleton lives for the
 //     process, so there is no subtree for an in-flight read to outlive.
-//   * Reads block. An async read completing against a destroyed context is the
-//     exact crash we shipped once; a synchronous read cannot be in flight when
-//     anything is torn down. The state file is ~210 bytes precisely so this
-//     costs nothing.
+//   * blockLoading is set, but do not mistake that for a guarantee: quickshell
+//     still logs "Starting async load" for this file, so reads here ARE async.
+//     The safety comes entirely from the singleton above -- an in-flight read
+//     has no subtree to outlive -- not from the read being synchronous. An
+//     earlier version of this comment claimed otherwise and was wrong.
 //   * No JsonAdapter, in either direction. The adapter dereferenced
 //     qmlEngine(this) unguarded and was the thing that actually segfaulted.
 //     JSON.parse in plain JavaScript cannot do that.
@@ -130,15 +131,6 @@ Singleton {
         root.restingReason = next.restingReason;
         root.nowMs = Date.now();
 
-        // Temporary diagnostic: report only transitions, so the shell log shows
-        // what this instance actually reads without spamming a line every tick.
-        if (next.everLoaded !== wasLoaded || next.restingReason !== root.restingReason)
-            console.log("writing-critter/StateSource path=" + root.statePath
-                        + " loaded=" + next.everLoaded
-                        + " resting='" + next.restingReason + "'"
-                        + " words=" + next.wordsToday
-                        + " rawLen=" + (raw === null || raw === undefined ? "null" : raw.length));
-
         // Only react to movement we actually watched. On the first successful
         // read after a shell restart the previous count is 0 by construction,
         // and treating that as words just written would make every critter
@@ -174,9 +166,12 @@ Singleton {
     FileView {
         id: stateFile
         path: root.statePath
-        // Synchronous: see the note at the top of this file. This is the
-        // property that makes teardown safe.
+        // Kept because it makes the first text() return data rather than an
+        // empty string, not because it makes the read synchronous. It does not.
         blockLoading: true
+        // Retained for in-place edits, but it cannot be relied on: the engine
+        // publishes by rename, which leaves this watch on a dead inode. The
+        // timer above is what actually keeps the widget current.
         watchChanges: true
         // The file is legitimately absent until the engine first runs; that is
         // a resting state, not an error worth printing on every shell start.

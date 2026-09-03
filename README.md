@@ -206,6 +206,23 @@ covered by fast tests instead of needing a running shell. The mascot grid
 invariant is asserted across every set, stage and mood; misaligned ASCII is the
 most visible way this plugin can look broken.
 
+## Updating
+
+`omarchy plugin update` reloads the plugin, but **QML singletons are cached for
+the life of the shell process**, and this plugin's state reader is one. A plugin
+update therefore leaves the previously loaded reader running: the bar keeps
+whatever behaviour it started with, no matter what the files on disk now say.
+This cost an hour of chasing a bug that had already been fixed.
+
+After updating, restart the shell:
+
+```bash
+omarchy-restart-shell
+```
+
+The engine is a separate systemd service and is not affected; `./install.sh`
+restarts it on its own.
+
 ## Verification status
 
 | | |

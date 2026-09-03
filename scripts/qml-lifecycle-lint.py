@@ -86,12 +86,18 @@ def check(path: Path) -> None:
 
 
 def check_blocking_reads(path: Path) -> None:
-    """Rule 5: every FileView reads synchronously.
+    """Rule 5: every FileView declares blockLoading.
 
-    An async read that completes after its context is destroyed is the crash in
-    docs/POSTMORTEM-ORPHANED-READ.md. A blocking read cannot be in flight during
-    a teardown, so this is the property that makes the widget structurally safe
-    rather than merely careful. It is affordable because state.json is tiny.
+    Note what this does and does not buy. Quickshell logs "Starting async load"
+    for a FileView even with blockLoading set, so this does NOT make reads
+    synchronous and does NOT by itself prevent the orphaned read in
+    docs/POSTMORTEM-ORPHANED-READ.md -- an earlier version of this docstring
+    claimed it did, and was wrong. What actually closes that hazard is owning
+    every FileView from a component nothing can destroy (here, a Singleton).
+
+    The rule is kept because blockLoading makes the first text() return data
+    instead of an empty string, and because a FileView appearing without it is
+    a signal that someone is adding file I/O without having read the postmortem.
     """
     text = path.read_text()
     for match in re.finditer(r"FileView\s*\{", text):
@@ -109,8 +115,8 @@ def check_blocking_reads(path: Path) -> None:
             lineno = text[:match.start()].count("\n") + 1
             failures.append(
                 f"{path.name}:{lineno}: FileView without `blockLoading: true`.\n"
-                f"    A read still in flight when the subtree is destroyed is the crash\n"
-                f"    we shipped once (rule 5)."
+                f"    Also confirm this FileView is owned by something nothing destroys;\n"
+                f"    that ownership, not this flag, is what prevents the orphaned read."
             )
 
 
