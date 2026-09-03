@@ -97,6 +97,13 @@ class Config:
         cfg.validate()
         return cfg
 
+    def mtime(self) -> float:
+        """The config file's mtime, or 0 when it does not exist."""
+        try:
+            return self.path.stat().st_mtime
+        except OSError:
+            return 0.0
+
     def validate(self) -> None:
         v = self.values
         if not isinstance(v["goal"], int) or v["goal"] < 1:
@@ -575,6 +582,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     engine.load_state()
     engine.seed_baselines()
+    config_mtime = config.mtime()
     focus = HyprlandFocus(log)
     engine.set_focus(focus.current())
     log("engine.ready", goal=config.values["goal"], paths=len(config.watch_paths),
@@ -596,6 +604,24 @@ def cmd_run(args: argparse.Namespace) -> int:
                     for app_id in focus.drain(sock):
                         engine.set_focus(app_id)
                     continue
+                # Pick up "config add-path" without a restart. Writing the
+                # file and having the running engine ignore it is how a working
+                # tool looks broken.
+                seen = config.mtime()
+                if seen != config_mtime:
+                    config_mtime = seen
+                    try:
+                        config = Config.load(args.config)
+                    except ConfigError as exc:
+                        # A half-written file mid-edit must not kill the service.
+                        log("config.reload_failed", error=exc)
+                    else:
+                        engine.config = config
+                        log("config.reloaded", paths=len(config.watch_paths),
+                            goal=config.values["goal"])
+                        # Baseline whatever just became visible, or every word
+                        # already in a newly watched vault counts as written today.
+                        engine.seed_baselines()
                 if engine.refresh_gate():
                     engine.cycle()
     except ConnectionError as exc:

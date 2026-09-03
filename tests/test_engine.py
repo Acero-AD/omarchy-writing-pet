@@ -3,6 +3,7 @@
 
 import importlib.machinery
 import importlib.util
+import os
 import json
 import sys
 import tempfile
@@ -479,6 +480,45 @@ class TestFocusLogging(TempConfig):
         changes = [kw for ev, kw in lines if ev == "focus.change"]
         self.assertEqual(changes[0]["gate"], "open (grace)",
                          "the terminal did not open the gate; the grace window did")
+
+
+class TestConfigReload(TempConfig):
+    """The reload path must never credit words that were already on disk."""
+
+    def test_a_newly_watched_vault_is_baselined_not_counted(self):
+        vault = Path(self.dir.name) / "vault"
+        vault.mkdir()
+        (vault / "old.md").write_text("one two three four five six seven eight")
+
+        self.write(json.dumps({"watch": [], "graceSeconds": 15}))
+        e = engine.Engine(engine.Config.load(self.path), engine.Log(enabled=False))
+        e.state_path = Path(self.dir.name) / "state.json"
+        e.seed_baselines()
+        self.assertEqual(e.tracker.total(), 0)
+
+        # The user adds the vault; the engine reloads and re-seeds.
+        self.write(json.dumps({"watch": [str(vault)], "graceSeconds": 15}))
+        e.config = engine.Config.load(self.path)
+        e.seed_baselines()
+        self.assertEqual(e.tracker.total(), 0,
+                         "existing notes in a newly watched vault are not today's writing")
+
+        # Writing after the reload does count.
+        (vault / "new.md").write_text("nine ten")
+        e.set_focus("md.obsidian.Obsidian")
+        e.cycle()
+        self.assertEqual(e.tracker.total(), 2)
+
+    def test_mtime_reports_zero_when_absent(self):
+        cfg = engine.Config(path=Path(self.dir.name) / "nope.json")
+        self.assertEqual(cfg.mtime(), 0.0)
+
+    def test_mtime_moves_when_the_file_is_rewritten(self):
+        self.write(json.dumps({"watch": []}))
+        cfg = engine.Config.load(self.path)
+        first = cfg.mtime()
+        os.utime(self.path, (first + 10, first + 10))
+        self.assertNotEqual(cfg.mtime(), first)
 
 
 if __name__ == "__main__":
