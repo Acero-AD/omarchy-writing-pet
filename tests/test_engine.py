@@ -177,9 +177,6 @@ class TestStateReading(unittest.TestCase):
                 engine.STATE_PATH = original
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
 
 class TestTracker(unittest.TestCase):
     def test_seeding_an_existing_vault_contributes_nothing(self):
@@ -449,3 +446,5 @@ class TestRolloverAndResilience(TempConfig):
             self.assertIn(field, payload, f"docs/STATE-FILE.md promises '{field}'")
         self.assertEqual(payload["schema"], 1)
         self.assertEqual(payload["wordsToday"], 42)
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
