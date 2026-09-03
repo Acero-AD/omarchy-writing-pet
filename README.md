@@ -26,18 +26,25 @@ progress, and a streak of the last seven days.
                         "The shell is thinning."
 ```
 
-> ## ⚠️ DO NOT INSTALL — no counting, and a crash history
+> ## ⚠️ Pre-release — counting works, live soak still owed
 >
 > On 2026-09-02 this plugin **segfaulted `quickshell` in a crash loop**, taking
-> the entire desktop shell down with it. That crash is now diagnosed and its
-> cause removed — see
-> [docs/POSTMORTEM-ORPHANED-READ.md](docs/POSTMORTEM-ORPHANED-READ.md) — but the
-> plugin still **does not count anything**: the counting engine is being rebuilt
-> outside the shell process, and the widget currently renders a resting critter
-> and nothing more.
+> the entire desktop shell down with it. That crash is diagnosed and its cause
+> removed — see
+> [docs/POSTMORTEM-ORPHANED-READ.md](docs/POSTMORTEM-ORPHANED-READ.md). All
+> counting now happens in a separate process (`bin/writing-critter`); the widget
+> only reads a small state file, with blocking reads from a singleton, so no
+> async read can outlive a teardown.
 >
-> Do not run `omarchy plugin add` on this repository until this line is gone.
-> If you already have, remove it:
+> What is verified: the engine counts real writing in a real editor; the widget
+> renders it; and the shell survives a truncated, malformed, hostile,
+> unknown-schema or entirely absent state file, recovering without a restart.
+>
+> What is not: a long live soak, and the vertical-bar and proportional-font
+> paths. Until those are done, treat this as pre-release rather than something
+> to depend on.
+>
+> To remove it:
 >
 > ```bash
 > omarchy plugin remove io.github.acero-ad.writing-critter --yes
@@ -203,11 +210,14 @@ most visible way this plugin can look broken.
 
 | | |
 |---|---|
-| Unit tests, security guard, manifest, qmllint | ✅ passing |
-| Live bar rendering | ✅ the critter renders in the bar |
-| Service mounting | ⚠️ the shell does not mount third-party services; the bar widget hosts it instead |
-| Counting, discovery, rollover | ⬜ never reached — see the crash above |
-| Shell stability | ⚠️ crash diagnosed and cause removed; no async work remains in QML, unverified on a live session |
+| Unit tests, security guard, lifecycle lint, manifest | ✅ 71 Python, 25 JS, all passing |
+| Counting real writing | ✅ verified in Typora and an Obsidian vault |
+| Rollover, restart, restored baselines | ✅ covered by tests and a live restart |
+| Live bar rendering | ✅ the critter renders from the state file |
+| Malformed / absent state file | ✅ shell survives truncated, non-object, hostile, unknown-schema and deleted; recovers with no restart |
+| Service mounting | n/a — the engine is a systemd user service, not a shell service |
+| Shell stability under long use | ⚠️ shell PID unchanged so far; a proper soak is still owed |
+| Vertical bar, proportional shell font | ⬜ not yet exercised |
 | Screenshot / marketplace submission | ⬜ pending |
 
 Design rationale and the full technical spec live in

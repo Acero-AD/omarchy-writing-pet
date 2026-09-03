@@ -68,7 +68,7 @@ The revert removed the trigger, not the cause. These may be done immediately and
 - [ ] 7.1 Run against a throwaway shell instance first, then install on a live session and confirm the shell's process identifier is unchanged after an hour of normal use. Isolated success is explicitly not sufficient evidence
 - [ ] 7.1a Watch for the crash signature specifically during startup: a tight loop roughly one second after launch, completion-callback frames reached from `sendPostedEvents`, and a `this=0x0` on `qmlEngine()`
 - [ ] 7.2 Confirm the widget tracks the engine: counting, stage changes, celebration at goal
-- [ ] 7.3 Point the widget at a deliberately malformed state file and confirm the shell survives and the critter rests
-- [ ] 7.4 Stop the engine and confirm the widget rests and explains why, then restart it and confirm recovery without a shell restart
+- [x] 7.3 Point the widget at a deliberately malformed state file and confirm the shell survives and the critter rests
+- [x] 7.4 Stop the engine and confirm the widget rests and explains why, then restart it and confirm recovery without a shell restart
 - [ ] 7.5 Verify vertical bar mode and a proportional shell font
 - [ ] 7.6 Remove the DO NOT INSTALL warning from the README only once 7.1 to 7.5 have passed
