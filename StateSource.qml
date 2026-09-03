@@ -130,6 +130,15 @@ Singleton {
         root.restingReason = next.restingReason;
         root.nowMs = Date.now();
 
+        // Temporary diagnostic: report only transitions, so the shell log shows
+        // what this instance actually reads without spamming a line every tick.
+        if (next.everLoaded !== wasLoaded || next.restingReason !== root.restingReason)
+            console.log("writing-critter/StateSource path=" + root.statePath
+                        + " loaded=" + next.everLoaded
+                        + " resting='" + next.restingReason + "'"
+                        + " words=" + next.wordsToday
+                        + " rawLen=" + (raw === null || raw === undefined ? "null" : raw.length));
+
         // Only react to movement we actually watched. On the first successful
         // read after a shell restart the previous count is 0 by construction,
         // and treating that as words just written would make every critter
