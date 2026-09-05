@@ -703,10 +703,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         with sock:
             while True:
                 readable, _, _ = select.select([sock], [], [], config.poll_seconds)
-                if readable:
-                    for app_id in focus.drain(sock):
-                        engine.set_focus(app_id)
-                    continue
+
+                # Checked on every wake, not only on a timeout tick. Hyprland
+                # re-emits activewindow when a window's title changes and
+                # editors rewrite their title as you type, so a stream of focus
+                # events could otherwise starve this branch for as long as you
+                # kept writing. It is one stat().
+                #
                 # Pick up "config add-path" without a restart. Writing the
                 # file and having the running engine ignore it is how a working
                 # tool looks broken.
@@ -725,6 +728,18 @@ def cmd_run(args: argparse.Namespace) -> int:
                         # Baseline whatever just became visible, or every word
                         # already in a newly watched vault counts as written today.
                         engine.seed_baselines()
+                        # Publish at once. Goal and mascot are user-visible and
+                        # have just changed; without this the new value reaches
+                        # the bar only on the next counted cycle or the next
+                        # heartbeat, so a click in the panel could take half a
+                        # minute to show up and read as broken.
+                        engine.write_state()
+                        last_publish = time.time()
+
+                if readable:
+                    for app_id in focus.drain(sock):
+                        engine.set_focus(app_id)
+                    continue
                 if engine.refresh_gate() and engine.cycle():
                     last_publish = time.time()
                 # A cycle only publishes when a file changed, so a reader
