@@ -118,34 +118,80 @@ watched path.
 
 ## Configure
 
-Everything is editable in the panel. If you prefer declarative config, any key
-in the widget's `~/.config/omarchy/shell.json` entry **overrides** the stored
-setting, and the panel shows those fields as locked:
+Open the panel and change what you need. Every control commits by invoking the
+engine's own command, so the config file keeps exactly one writer and the shell
+is not it.
 
-```json
-{
-  "id": "io.github.acero-ad.writing-critter",
-  "goal": 750,
-  "mascot": "snail",
-  "showNumbers": false
-}
+| Control | What it does |
+|---|---|
+| **Goal** | A slider, 100–3000 in steps of 50. Commits when you let go. |
+| **Watch paths** | Each folder listed with a remove button, plus **Add path**, which opens a directory browser starting at your home folder. You can navigate above it, so a vault under `/mnt` is reachable. |
+| **Writing apps** | Each app listed with a remove button. |
+| **Mascot** | `bird` or `snail`. |
+
+Nothing in the panel is typed. That is deliberate: the identifier your
+compositor reports for an application is usually not its name — Obsidian is
+`md.obsidian.Obsidian` — so guessing it is hopeless and typing it is
+error-prone. Instead the engine publishes the last application it saw and did
+**not** count, and the panel offers it as a single button. Focus your editor,
+open the panel, click once.
+
+The same applies to folders: you browse to one and confirm it, so the engine
+never receives a path you composed by hand.
+
+### From a terminal
+
+The panel is a front end to these; they remain the complete interface, and they
+work with no shell running.
+
+```bash
+writing-critter config show
+writing-critter config set-goal 800
+writing-critter config set-mascot snail
+writing-critter config add-path ~/notes
+writing-critter config remove-path ~/notes
+writing-critter config add-app md.obsidian.Obsidian
+writing-critter config remove-app md.obsidian.Obsidian
 ```
+
+Changes made here appear in an open panel within a couple of seconds, and a
+running engine picks them up without a restart.
+
+### The config file
+
+`~/.config/writing-critter/config.json`. Settings without a panel control are
+edited here; the engine rejects a file it cannot parse rather than overwriting
+it.
 
 | Setting | Default | What it does |
 |---|---|---|
 | `goal` | `500` | Words per day |
-| `watch` | `[]` | `{ path, recursive, extensions }` entries to count |
-| `whitelist` | `omawrite, obsidian, Typora, soffice, libreoffice-writer` | Apps that wake the critter |
+| `watch` | `[]` | Absolute paths to count in, recursively |
+| `extensions` | `[".md", ".txt"]` | File types counted |
+| `whitelist` | `omawrite, obsidian, typora, soffice, libreoffice-writer, ghostwriter, apostrophe` | Apps that wake the critter. Matched on whole dot-separated segments, so `obsidian` matches `md.obsidian.Obsidian`. |
 | `mascot` | `bird` | `bird` or `snail` |
+| `graceSeconds` | `15` | Keep counting this long after focus leaves, so an autosave that lands just after you alt-tab still counts |
+| `pollSeconds` | `2` | Scan interval, clamped 1–30 |
+| `lookbackSeconds` | `3` | Modification window per scan; always at least one poll longer than `pollSeconds` |
+| `recountCap` | `200` | Most files re-read in a single cycle |
 | `netMode` | `additive` | `net` makes deletions subtract |
-| `pollMs` | `2000` | Poll interval (clamped 1000–30000) |
-| `graceMs` | `15000` | Keep counting this long after focus leaves |
-| `showNumbers` | `true` | Show `412/1000` beside the critter |
-| `idleNudge` | `true` | The `z` when asleep |
-| `notifyOnGoal` | `false` | Desktop notification at goal |
 
-Not sure what your editor is called? Open **Settings** — the focused window's
-identifier is displayed live, with a button to add it.
+### Display options
+
+Two widget-level settings live in the plugin's entry in
+`~/.config/omarchy/shell.json`, because they are about the bar rather than the
+count:
+
+```json
+{
+  "id": "io.github.acero-ad.writing-critter",
+  "showNumbers": true,
+  "idleNudge": true
+}
+```
+
+`showNumbers` shows `412/500` beside the critter; `idleNudge` shows the `z` when
+it is asleep. On a vertical bar the numbers move to the tooltip regardless.
 
 ## How it works
 
@@ -209,10 +255,11 @@ most visible way this plugin can look broken.
 ## Updating
 
 `omarchy plugin update` reloads the plugin, but **QML singletons are cached for
-the life of the shell process**, and this plugin's state reader is one. A plugin
-update therefore leaves the previously loaded reader running: the bar keeps
-whatever behaviour it started with, no matter what the files on disk now say.
-This cost an hour of chasing a bug that had already been fixed.
+the life of the shell process**, and this plugin has two of them: the state
+reader and the settings controller. A plugin update therefore leaves the
+previously loaded ones running: the bar keeps whatever behaviour it started
+with, no matter what the files on disk now say. This cost an hour of chasing a
+bug that had already been fixed.
 
 After updating, restart the shell:
 

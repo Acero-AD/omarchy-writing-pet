@@ -119,3 +119,43 @@ outlive. `blockLoading` is kept for a smaller reason — it makes the first
 Recorded because a comment asserting a guarantee the code does not provide is
 worse than no comment: it invites exactly the reasoning that caused the original
 crash.
+
+## Narrowing the rules, 2026-09-04
+
+Two of the rules written here the day after the crash have been narrowed, and it
+is worth recording why, because the reasoning applies to the next rule someone
+is tempted to write in an emergency.
+
+The original text forbade the shell process from writing any file and from
+spawning any process. Neither prohibition was derived from the failure. The
+crash needed four conditions — a `Loader.active` bound to a value that settled
+late, a `preload`ed `FileView`, a `JsonAdapter` dereferencing `qmlEngine(this)`
+unguarded, and a read completing into a destroyed context. None of them is a
+write, and none is a spawn. The write path in the old code was *adjacent* to the
+failure — it is how the component that crashed came to exist — but it was not
+the mechanism.
+
+Those two rules were prophylactic: written to shrink the surface area while the
+desktop was still crashing, which was the right call at the time. The rule that
+was actually load-bearing is the ownership one, and it is unchanged:
+
+> Nothing holding outstanding asynchronous work may live in a destroyable
+> subtree.
+
+So that is what the linter now enforces for subprocesses. A `Process` is
+permitted, but only inside a `pragma Singleton` component, and only to run the
+plugin's own engine. `startDetached` stays forbidden outright: it survives its
+owner by design and reports no exit status, so a failed change would be
+invisible. Writing from the shell stays forbidden outright too — not because it
+crashes, but because the engine's config file must keep exactly one writer.
+
+Measured while implementing this: `FolderListModel` populates asynchronously. A
+probe read `count == 0` immediately after setting `folder`, and the real entries
+one tick later. Had it been placed in the panel, where it naturally belongs, it
+would have been a directory scan running inside a subtree that is rebuilt on
+every monitor hotplug — the same shape as the original crash, arrived at from a
+completely different direction. It lives in the singleton instead.
+
+The lesson is not that the emergency rules were wrong to write. It is that a
+rule written to stop bleeding should say so, so that whoever revisits it knows
+whether they are relaxing a safeguard or removing a splint.
