@@ -2,20 +2,7 @@
 
 ## Purpose
 The bar widget and panel: a read-only view of engine state, built under the lifecycle rules the 2026-09-02 crash established.
-
 ## Requirements
-
-### Requirement: The widget performs no I/O beyond reading the state file
-The bar widget and its panel SHALL read the state file and render. They MUST NOT spawn processes, write any file, use a writable file adapter, or create components dynamically at runtime.
-
-#### Scenario: No writes from the shell process
-- **WHEN** the widget and panel run for a full session
-- **THEN** no file is written and no subprocess is spawned by the plugin
-
-#### Scenario: Source-level guard
-- **WHEN** the repository is checked by CI
-- **THEN** the QML sources contain no process execution, no write adapter, and no dynamic component creation
-
 ### Requirement: A plugin fault must not reach the desktop shell
 The widget SHALL be written so that any failure degrades to a blank or stale critter rather than affecting the host shell. Every value read from the state file MUST be treated as untrusted and range-checked before use.
 
@@ -50,11 +37,20 @@ The widget SHALL render the fixed-width ASCII face in the bar and multi-line art
 - **THEN** every set, stage and mood combination is asserted for exact dimensions and ASCII-only content
 
 ### Requirement: Panel controls act through the engine, never by writing state
-Controls offered in the panel SHALL be limited to those that can be expressed without the widget writing anything. Configuration that requires a write MUST be presented as an engine command the user can run, not performed by the widget.
+Controls offered in the panel SHALL change configuration only by invoking the
+engine, which remains the sole writer of the configuration file. The panel MUST
+NOT write configuration itself, MUST NOT write the state file, and MUST NOT
+duplicate the engine's validation. A setting the engine cannot express as a
+subcommand MUST be presented as a command the user can run, not performed by the
+widget.
 
-#### Scenario: Configuration is directed, not performed
-- **WHEN** the user opens the panel's settings view
-- **THEN** it displays the current configuration and the engine commands to change it, and writes nothing itself
+#### Scenario: Configuration is delegated, not performed
+- **WHEN** the user changes a setting in the panel
+- **THEN** the engine performs the write after validating the value, and the panel writes nothing
+
+#### Scenario: Validation is not duplicated
+- **WHEN** an invalid value somehow reaches the engine from the panel
+- **THEN** the engine rejects it with its existing validation, and the panel has no separate rule that could disagree
 
 ### Requirement: No component lifetime may depend on a late-settling value
 No `Loader.active`, `Component` condition, or equivalent lifetime binding may depend on an expression that can be unresolved at construction and resolve a moment later. Anything of that shape builds a subtree and then destroys it during startup. Lifetime SHALL be gated on a value already resolved at construction, or the component SHALL be mounted unconditionally once.
@@ -109,3 +105,23 @@ A component passing in a throwaway shell instance SHALL NOT be treated as eviden
 #### Scenario: Both runs are required
 - **WHEN** a QML change is prepared for release
 - **THEN** it is run against a throwaway instance first and then verified in a live session, and neither alone is accepted
+
+### Requirement: The widget writes nothing, and spawns only from a singleton
+The bar widget and its panel MUST NOT write any file, MUST NOT use a writable
+file adapter, and MUST NOT create components dynamically at runtime. They MAY
+read the engine's state and configuration files and MAY list directories for the
+path picker. A process MAY be spawned only from a singleton, only with a program
+on a fixed allowlist, and only in response to an explicit user action.
+
+#### Scenario: No writes from the shell process
+- **WHEN** the widget and panel run for a full session, including changing every setting
+- **THEN** no file is written by the plugin's QML
+
+#### Scenario: Source-level guard
+- **WHEN** the repository is checked by CI
+- **THEN** the QML sources contain no write adapter and no dynamic component creation, and every process declaration is inside a singleton with an allowlisted program
+
+#### Scenario: No process without a user action
+- **WHEN** the shell starts and the panel is never opened
+- **THEN** the plugin spawns no process
+

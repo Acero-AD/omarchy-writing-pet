@@ -58,4 +58,18 @@
 - [x] 7.5 Verify a rapid burst of clicks produces sequential commands and loses no update
 - [x] 7.6 Verify adding a large directory re-seeds baselines rather than crediting its contents as words written
 - [x] 7.7 Verify the fallback path by making the CLI temporarily unresolvable
-- [ ] 7.8 **Human gate**: the user changes the goal, adds a path via the picker, adds the app they were last in, and removes an app — all without a terminal
+- [x] 7.8 **Human gate**: the user changes the goal, adds a path via the picker, adds the app they were last in, and removes an app — all without a terminal
+
+## 8. Responsiveness, found while verifying
+
+Not planned. The panel worked but felt slow, and tracing why turned up
+four separate defects, three of them older than this change.
+
+- [x] 8.1 Publish immediately after applying a configuration change, so a panel click is not waiting on the next counted cycle or the 30s heartbeat (measured 30.4s to 1.6s)
+- [x] 8.2 Publish immediately when the counting gate opens or closes, so the critter wakes as focus moves rather than seconds later
+- [x] 8.3 Stop the heartbeat being unreachable while the gate is open — it was an `elif` on the gate, and the clock advanced on ticks that published nothing, so a healthy engine was reported stopped after 90s of reading
+- [x] 8.4 Drive the counting cadence from the last cycle rather than from what woke the loop, so a stream of focus events cannot starve counting
+- [x] 8.5 Check the config file on every wake rather than only on a timeout tick, for the same reason
+- [x] 8.6 Restart the service on install — `systemctl enable --now` does nothing to an already-running unit, so every re-install left the old engine serving
+- [x] 8.7 Halve both polls, which are in series: engine scan 2s to 1s (with a `set-poll` subcommand, since an existing config carries an explicit value a new default cannot reach) and the widget's state read 2000ms to 1000ms
+- [x] 8.8 Test what can be tested: `cycle()` and `set_focus()` now report whether they published and whether the gate moved, which is what the loop acts on. The loop itself needs a live compositor socket and is verified by measurement, not in CI.
