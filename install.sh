@@ -15,7 +15,12 @@ install -m 755 bin/writing-critter "$BIN_DIR/writing-critter"
 install -m 644 contrib/writing-critter.service "$UNIT_DIR/writing-critter.service"
 
 systemctl --user daemon-reload
-systemctl --user enable --now writing-critter.service
+systemctl --user enable writing-critter.service
+# restart, not `enable --now`: --now starts a unit that is stopped and does
+# nothing to one already running, so re-running this script used to replace the
+# binary on disk and leave the old process serving. The update looked applied
+# and was not -- the same trap as the shell's cached QML singletons.
+systemctl --user restart writing-critter.service
 
 echo
 echo "Installed:  $BIN_DIR/writing-critter"
