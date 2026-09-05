@@ -617,12 +617,17 @@ class Engine:
 
     # ------------------------------------------------------------- cycle
 
-    def cycle(self) -> None:
+    def cycle(self) -> bool:
+        """Count what changed. Returns True if state was published.
+
+        The caller needs to know: it drives the heartbeat off the last real
+        publish, and a cycle that found nothing has not proved anything.
+        """
         self.check_rollover()
         cutoff = time.time() - self.config.lookback_seconds
         changed = scan(self.config.watch_paths, self.config.values["extensions"], cutoff, self.log)
         if not changed:
-            return
+            return False
 
         cap = int(self.config.values["recountCap"])
         if len(changed) > cap:
@@ -646,6 +651,7 @@ class Engine:
         if self.words != before:
             self.log("words.counted", added=self.words - before, today=self.words,
                      goal=self.config.values["goal"], files=len(changed))
+        return True
 
     def blocking_reason(self) -> str | None:
         """Why counting cannot happen right now, or None if it can."""
@@ -719,15 +725,20 @@ def cmd_run(args: argparse.Namespace) -> int:
                         # Baseline whatever just became visible, or every word
                         # already in a newly watched vault counts as written today.
                         engine.seed_baselines()
-                if engine.refresh_gate():
-                    engine.cycle()
+                if engine.refresh_gate() and engine.cycle():
                     last_publish = time.time()
                 # A cycle only publishes when a file changed, so a reader
                 # watching updatedAt would call a healthy but idle engine
                 # "stopped" within a couple of minutes of the last word. The
                 # heartbeat is what makes that field mean what the contract
                 # says it means. State is tiny; tracking is not, and is skipped.
-                elif time.time() - last_publish >= HEARTBEAT_SECONDS:
+                #
+                # This is deliberately not an `elif` on the gate, and the clock
+                # only advances on a real publish. It used to be both, which
+                # meant an open gate reset the timer every tick while writing
+                # nothing: sit in your editor reading for ninety seconds and the
+                # bar called a perfectly healthy engine stopped.
+                if time.time() - last_publish >= HEARTBEAT_SECONDS:
                     engine.write_state(include_tracking=False)
                     last_publish = time.time()
     except ConnectionError as exc:

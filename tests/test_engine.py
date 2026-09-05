@@ -731,5 +731,50 @@ class TestWhitelistCandidate(TempConfig):
         self.assertNotIn("two.App", blob)
 
 
+class TestCyclePublishReporting(TempConfig):
+    """The run loop drives its heartbeat off the last real publish.
+
+    It used to reset that clock on every tick while the gate was open, whether
+    or not anything had been written. The effect was that sitting in an editor
+    reading for ninety seconds made the bar report a healthy engine as stopped,
+    because updatedAt never moved. cycle() reporting honestly is what the fix
+    rests on.
+    """
+
+    def build(self):
+        watch = Path(self.dir.name) / "w"
+        watch.mkdir()
+        self.write(json.dumps({"watch": [str(watch)], "whitelist": ["kate"],
+                               "graceSeconds": 0}))
+        eng = engine.Engine(engine.Config.load(self.path), engine.Log(enabled=False))
+        eng.state_path = Path(self.dir.name) / "state.json"
+        return eng, watch
+
+    def test_a_cycle_that_found_nothing_reports_no_publish(self):
+        eng, _ = self.build()
+        self.assertIs(eng.cycle(), False)
+        self.assertFalse(eng.state_path.exists(),
+                         "nothing changed, so nothing should have been written")
+
+    def test_a_cycle_that_counted_reports_a_publish(self):
+        eng, watch = self.build()
+        (watch / "note.md").write_text("one two three")
+        self.assertIs(eng.cycle(), True)
+        self.assertTrue(eng.state_path.exists())
+
+    def test_a_second_cycle_over_a_quiet_directory_reports_no_publish(self):
+        # The case that mattered: an open gate ticking over a directory nobody
+        # has touched lately. The file has to age out of the lookback window --
+        # inside it, scan re-finding the same file and republishing is correct.
+        eng, watch = self.build()
+        note = watch / "note.md"
+        note.write_text("one two three")
+        self.assertIs(eng.cycle(), True)
+        old = time.time() - (eng.config.lookback_seconds + 60)
+        os.utime(note, (old, old))
+        self.assertIs(eng.cycle(), False,
+                      "an idle tick must not look like a publish to the heartbeat")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
