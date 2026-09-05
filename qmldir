@@ -1,1 +1,2 @@
 singleton StateSource 1.0 StateSource.qml
+singleton Control 1.0 Control.qml

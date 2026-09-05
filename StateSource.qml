@@ -53,6 +53,11 @@ Singleton {
     property real updatedAt: 0
     property var byOrigin: ({})
     property var history: []
+    // The most recent focused app the engine is NOT counting, or "". Offered by
+    // the panel as a one-tap addition; the compositor's identifier for an app is
+    // rarely its name (Obsidian is "md.obsidian.Obsidian") so it cannot be typed
+    // reliably or guessed at all.
+    property string lastFocusedApp: ""
 
     // True once a well-formed state file has been read at least once.
     property bool everLoaded: false
@@ -117,6 +122,7 @@ Singleton {
             updatedAt: root.updatedAt,
             byOrigin: root.byOrigin,
             history: root.history,
+            lastFocusedApp: root.lastFocusedApp,
             everLoaded: root.everLoaded,
             restingReason: root.restingReason
         });
@@ -127,6 +133,7 @@ Singleton {
         root.updatedAt = next.updatedAt;
         root.byOrigin = next.byOrigin;
         root.history = next.history;
+        root.lastFocusedApp = next.lastFocusedApp;
         root.everLoaded = next.everLoaded;
         root.restingReason = next.restingReason;
         root.nowMs = Date.now();
