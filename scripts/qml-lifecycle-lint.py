@@ -18,11 +18,52 @@ ROOT = Path(__file__).resolve().parent.parent
 LITERAL_ACTIVE = re.compile(r"^\s*active:\s*(true|false)\s*(//.*)?$")
 ACTIVE_BINDING = re.compile(r"^\s*active:\s*(.+?)\s*$")
 
+# Rule 3 allows exactly one program: the plugin's own engine. Anything else in
+# the shell process is the architecture leaking back in.
+ALLOWED_PROGRAMS = {"writing-critter"}
+
 failures = []
 
 
+def command_program(line: str, source: str) -> tuple[str | None, str]:
+    """The program a `command:` line will run, and how it was determined.
+
+    Two shapes are understood. A literal first element is read directly. An
+    identifier is resolved against its property declaration in the same file,
+    which is how the program gets written when it is a resolved absolute path.
+    Anything else is unresolvable and rejected rather than assumed safe.
+    """
+    body = line.split(":", 1)[1].strip()
+    if not body.startswith("["):
+        return None, "not an argument list"
+    first = body[1:].split(",", 1)[0].strip()
+
+    literal = re.match(r"""^["'](.+?)["']$""", first)
+    if literal:
+        return literal.group(1).rsplit("/", 1)[-1], "literal"
+
+    name = first.rsplit(".", 1)[-1]
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+        return None, f"cannot resolve {first!r}"
+
+    decl = re.search(
+        rf"^\s*(?:readonly\s+)?property\s+\w+\s+{re.escape(name)}\s*:(.*)$",
+        source, re.M)
+    if not decl:
+        return None, f"{name!r} is not declared in this file"
+    literals = re.findall(r"""["']([^"']+)["']""", decl.group(1))
+    if not literals:
+        return None, f"{name!r} resolves to no string literal"
+    programs = {lit.rsplit("/", 1)[-1] for lit in literals}
+    if len(programs) != 1:
+        return None, f"{name!r} could be any of {sorted(programs)}"
+    return programs.pop(), f"via property {name}"
+
+
 def check(path: Path) -> None:
-    lines = path.read_text().splitlines()
+    source = path.read_text()
+    is_singleton = re.search(r"^\s*pragma\s+Singleton\s*$", source, re.M) is not None
+    lines = source.splitlines()
     depth_stack = []  # (type_name, brace_depth)
     depth = 0
 
@@ -64,13 +105,49 @@ def check(path: Path) -> None:
                 f"    branch that dereferences the QML engine."
             )
 
-        # Rule 3: the shell process runs no subprocesses. Counting lives in the
-        # engine; a Process here is the architecture leaking back in.
-        if re.match(r"^Process\s*\{", stripped) or re.search(r"\b(startDetached|exec)\s*\(", stripped):
+        # Rule 3: a subprocess may exist, but only where it cannot be orphaned,
+        # and only to run the plugin's own engine.
+        #
+        # This was a blanket ban until the panel gained settings controls. The
+        # ban was written the day after the crash, when the priority was
+        # shrinking surface area; none of the crash's four conditions was a
+        # spawn. What was load-bearing is ownership, so that is what is enforced
+        # now: a Process in a per-screen subtree can be destroyed mid-flight by
+        # a monitor hotplug, which is the shape that segfaulted the shell.
+        if re.match(r"^Process\s*\{", stripped) and not is_singleton:
             failures.append(
-                f"{path.name}:{lineno}: process execution in the shell.\n"
-                f"    All subprocess work belongs in bin/writing-critter (rule 3)."
+                f"{path.name}:{lineno}: Process outside a singleton.\n"
+                f"    The bar builds one subtree per screen, so this can be destroyed\n"
+                f"    mid-flight by a monitor hotplug. Move it into a `pragma Singleton`\n"
+                f"    component, which lives for the process (rule 3)."
             )
+
+        # startDetached survives its owner by design and reports no exit code,
+        # so a failed configuration change would be invisible. Never permitted.
+        if re.search(r"\bstartDetached\s*\(", stripped):
+            failures.append(
+                f"{path.name}:{lineno}: startDetached outlives its owner and returns\n"
+                f"    no exit status, so a failure cannot be reported (rule 3)."
+            )
+
+        if stripped.startswith("command:"):
+            if not is_singleton:
+                failures.append(
+                    f"{path.name}:{lineno}: process command outside a singleton (rule 3)."
+                )
+            program, how = command_program(line, source)
+            if program is None:
+                failures.append(
+                    f"{path.name}:{lineno}: cannot determine the program this runs\n"
+                    f"    ({how}). Rule 3 allows only {sorted(ALLOWED_PROGRAMS)}, and a\n"
+                    f"    command the linter cannot read is not a command it can allow."
+                )
+            elif program not in ALLOWED_PROGRAMS:
+                failures.append(
+                    f"{path.name}:{lineno}: runs {program!r} ({how}).\n"
+                    f"    Rule 3 allows only {sorted(ALLOWED_PROGRAMS)} from the shell\n"
+                    f"    process; everything else belongs in the engine."
+                )
 
         # Rule 4: the widget never writes. The engine is the only writer, and a
         # write path out of the shell is what the crash was reached through.
@@ -120,7 +197,10 @@ def check_blocking_reads(path: Path) -> None:
             )
 
 
-qml = sorted(ROOT.glob("*.qml"))
+# Given paths, check those; otherwise the plugin's own QML. The argument form
+# exists so tests/test_lint.py can probe every rule with a deliberate violation,
+# which the docstring above has always claimed and used to do only by hand.
+qml = [Path(a) for a in sys.argv[1:]] or sorted(ROOT.glob("*.qml"))
 if not qml:
     print("qml-lifecycle-lint: no QML files found", file=sys.stderr)
     sys.exit(1)
