@@ -776,5 +776,51 @@ class TestCyclePublishReporting(TempConfig):
                       "an idle tick must not look like a publish to the heartbeat")
 
 
+class TestFocusReportsGateTransitions(TempConfig):
+    """set_focus reports whether the gate changed, and the run loop publishes
+    when it does -- gateOpen is what tells the bar the critter is awake.
+
+    Nothing asserted this return value before, though the gate logic itself was
+    well covered. It became load-bearing when the loop started publishing on it.
+    """
+
+    def build(self, grace=0):
+        # A watch path is required: gate_open() short-circuits to False while
+        # blocking_reason() holds, and "no watch paths configured" is one.
+        self.write(json.dumps({"watch": ["/tmp"], "whitelist": ["typora"],
+                               "graceSeconds": grace}))
+        return engine.Engine(engine.Config.load(self.path), engine.Log(enabled=False))
+
+    def test_focusing_a_writing_app_reports_a_change(self):
+        e = self.build()
+        self.assertIs(e.set_focus("typora", now=1000), True)
+
+    def test_leaving_a_writing_app_reports_a_change(self):
+        e = self.build()
+        e.set_focus("typora", now=1000)
+        self.assertIs(e.set_focus("zen", now=1001), True)
+
+    def test_moving_between_two_uncounted_apps_reports_nothing(self):
+        e = self.build()
+        e.set_focus("zen", now=1000)
+        self.assertIs(e.set_focus("foot", now=1001), False,
+                      "no gate change means no reason to publish")
+
+    def test_a_title_change_on_the_same_app_reports_nothing(self):
+        # Hyprland re-emits activewindow when a title changes, and editors
+        # rewrite their title as you type. Publishing on each would be a write
+        # per keystroke.
+        e = self.build()
+        self.assertIs(e.set_focus("typora", now=1000), True)
+        self.assertIs(e.set_focus("typora", now=1001), False)
+        self.assertIs(e.set_focus("typora", now=1002), False)
+
+    def test_grace_holds_the_gate_open_so_leaving_reports_nothing(self):
+        e = self.build(grace=15)
+        e.set_focus("typora", now=1000)
+        self.assertIs(e.set_focus("zen", now=1001), False,
+                      "still open within the grace window, so nothing changed")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

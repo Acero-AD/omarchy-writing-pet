@@ -688,6 +688,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # the user happens to type, and the critter reads as dead while it is fine.
     engine.write_state()
     last_publish = time.time()
+    last_cycle = 0.0
     log("engine.ready", goal=config.values["goal"], paths=len(config.watch_paths),
         poll=config.poll_seconds, lookback=config.lookback_seconds)
 
@@ -738,10 +739,28 @@ def cmd_run(args: argparse.Namespace) -> int:
 
                 if readable:
                     for app_id in focus.drain(sock):
-                        engine.set_focus(app_id)
-                    continue
-                if engine.refresh_gate() and engine.cycle():
-                    last_publish = time.time()
+                        if engine.set_focus(app_id):
+                            # The gate just opened or closed, and gateOpen is
+                            # what tells the bar whether the critter is awake.
+                            # Publishing here rather than waiting for the next
+                            # cycle is the difference between the critter
+                            # waking as you focus your editor and waking a few
+                            # seconds later for no visible reason.
+                            engine.write_state(include_tracking=False)
+                            last_publish = time.time()
+
+                # Cadence is measured from the last cycle, not from what woke
+                # the loop. This used to `continue` on any focus event, so a
+                # burst of them skipped counting entirely -- and Hyprland emits
+                # activewindow on title changes, which editors make as you
+                # type. Measured on a live session: five events in fifteen
+                # seconds, half the gaps shorter than one poll interval, so
+                # roughly half the ticks never counted anything.
+                now = time.time()
+                if now - last_cycle >= config.poll_seconds:
+                    last_cycle = now
+                    if engine.refresh_gate() and engine.cycle():
+                        last_publish = now
                 # A cycle only publishes when a file changed, so a reader
                 # watching updatedAt would call a healthy but idle engine
                 # "stopped" within a couple of minutes of the last word. The
@@ -753,9 +772,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 # meant an open gate reset the timer every tick while writing
                 # nothing: sit in your editor reading for ninety seconds and the
                 # bar called a perfectly healthy engine stopped.
-                if time.time() - last_publish >= HEARTBEAT_SECONDS:
+                if now - last_publish >= HEARTBEAT_SECONDS:
                     engine.write_state(include_tracking=False)
-                    last_publish = time.time()
+                    last_publish = now
     except ConnectionError as exc:
         log("engine.stop", reason=exc)
         return 1
