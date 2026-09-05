@@ -272,6 +272,7 @@ function defaultState() {
     updatedAt: 0,
     byOrigin: {},
     history: [],
+    lastFocusedApp: "",
     everLoaded: false,
     restingReason: RESTING.never
   };
@@ -288,6 +289,7 @@ function parseState(raw, previous) {
     updatedAt: prev.updatedAt,
     byOrigin: prev.byOrigin,
     history: prev.history || [],
+    lastFocusedApp: prev.lastFocusedApp || "",
     everLoaded: prev.everLoaded,
     restingReason: prev.restingReason
   };
@@ -353,8 +355,79 @@ function parseState(raw, previous) {
   }
   next.history = history;
 
+  // The uncounted app the panel may offer to whitelist. Length-capped like any
+  // other untrusted string: this is rendered into a button label.
+  next.lastFocusedApp = (typeof parsed.lastFocusedApp === "string")
+    ? parsed.lastFocusedApp.slice(0, APP_ID_MAX) : "";
+
   next.everLoaded = true;
   next.restingReason = "";
+  return next;
+}
+
+// Untrusted-input caps. These values are rendered into buttons and lists, so a
+// pathological config must produce a cramped panel, never an unbounded one.
+var APP_ID_MAX = 128;
+var PATH_MAX = 512;
+var LIST_MAX = 64;
+
+function defaultConfig() {
+  return {
+    goal: 500,
+    watch: [],
+    whitelist: [],
+    mascot: MASCOT_DEFAULT,
+    loaded: false
+  };
+}
+
+function stringList(value) {
+  // Strings only, deduplicated, capped in both length and count. A non-string
+  // entry is dropped rather than coerced: the engine would not have written it,
+  // so something else did.
+  var out = [];
+  if (!Array.isArray(value)) return out;
+  for (var i = 0; i < value.length && out.length < LIST_MAX; i++) {
+    var entry = value[i];
+    if (typeof entry !== "string" || entry.length === 0) continue;
+    var trimmed = entry.slice(0, PATH_MAX);
+    if (out.indexOf(trimmed) === -1) out.push(trimmed);
+  }
+  return out;
+}
+
+// The engine's config file, read so the panel can show what is configured and
+// offer to change it. The panel never writes this; the engine is its only
+// writer. A missing file is normal -- it means the engine is running on
+// defaults -- and is not an error state.
+function parseConfig(raw, previous) {
+  var prev = previous || defaultConfig();
+  var next = defaultConfig();
+  next.goal = prev.goal;
+  next.watch = prev.watch;
+  next.whitelist = prev.whitelist;
+  next.mascot = prev.mascot;
+  next.loaded = prev.loaded;
+
+  if (raw === null || raw === undefined || String(raw).length === 0) {
+    // Absent or unreadable. Keep showing whatever was last known good rather
+    // than flashing defaults over the user's real settings.
+    return next;
+  }
+
+  var parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return next;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return next;
+
+  next.goal = clampInt(parsed.goal, 1, WORD_MAX, prev.goal);
+  next.watch = stringList(parsed.watch);
+  next.whitelist = stringList(parsed.whitelist);
+  if (MASCOTS[parsed.mascot]) next.mascot = parsed.mascot;
+  next.loaded = true;
   return next;
 }
 
@@ -380,6 +453,11 @@ if (typeof module !== "undefined" && module.exports) {
     RESTING: RESTING,
     clampInt: clampInt,
     defaultState: defaultState,
-    parseState: parseState
+    parseState: parseState,
+    APP_ID_MAX: APP_ID_MAX,
+    PATH_MAX: PATH_MAX,
+    LIST_MAX: LIST_MAX,
+    defaultConfig: defaultConfig,
+    parseConfig: parseConfig
   };
 }

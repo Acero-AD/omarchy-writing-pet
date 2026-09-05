@@ -226,3 +226,98 @@ test("history is an array even when the field is junk", () => {
   assert.ok(Array.isArray(s.history));
   assert.equal(s.history.length, 0);
 });
+
+// --------------------------------------------------------------- parseConfig
+//
+// The engine's config file, read by the panel so it can show what is set and
+// offer to change it. Untrusted for the same reason state.json is: the panel
+// renders these strings into buttons.
+
+const CONFIG = (over = {}) => JSON.stringify(Object.assign({
+  goal: 500, watch: [], extensions: [".md"], whitelist: [],
+  graceSeconds: 15, pollSeconds: 2, mascot: "bird"
+}, over));
+
+test("parseConfig: a missing file keeps defaults and stays unloaded", () => {
+  const c = M.parseConfig(null, null);
+  assert.equal(c.loaded, false);
+  assert.equal(c.goal, 500);
+  assert.deepEqual(c.watch, []);
+});
+
+test("parseConfig: reads the four settings the panel offers", () => {
+  const c = M.parseConfig(CONFIG({ goal: 800, watch: ["/notes"], whitelist: ["kate"], mascot: "snail" }), null);
+  assert.equal(c.loaded, true);
+  assert.equal(c.goal, 800);
+  assert.deepEqual(c.watch, ["/notes"]);
+  assert.deepEqual(c.whitelist, ["kate"]);
+  assert.equal(c.mascot, "snail");
+});
+
+test("parseConfig: malformed JSON holds the last good values", () => {
+  const good = M.parseConfig(CONFIG({ goal: 900, watch: ["/x"] }), null);
+  const after = M.parseConfig("{ truncated", good);
+  assert.equal(after.goal, 900, "a torn read must not blank the panel");
+  assert.deepEqual(after.watch, ["/x"]);
+});
+
+test("parseConfig: non-string list entries are dropped, not coerced", () => {
+  const c = M.parseConfig(CONFIG({ watch: ["/a", 42, null, "", "/b"] }), null);
+  assert.deepEqual(c.watch, ["/a", "/b"]);
+});
+
+test("parseConfig: duplicates collapse", () => {
+  const c = M.parseConfig(CONFIG({ whitelist: ["kate", "kate", "vim"] }), null);
+  assert.deepEqual(c.whitelist, ["kate", "vim"]);
+});
+
+test("parseConfig: a pathological config cannot produce an unbounded panel", () => {
+  const many = Array.from({ length: 500 }, (_, i) => "/p" + i);
+  const long = "/" + "x".repeat(5000);
+  const c = M.parseConfig(CONFIG({ watch: many.concat([long]) }), null);
+  assert.equal(c.watch.length, M.LIST_MAX);
+  const widest = c.watch.reduce((n, p) => Math.max(n, p.length), 0);
+  assert.ok(widest <= M.PATH_MAX);
+});
+
+test("parseConfig: a goal outside the range is clamped, not rejected", () => {
+  // Same convention parseState uses: a number is pulled into range, and only a
+  // non-number falls back. The engine will not write either of these -- it
+  // validates goal >= 1 -- so this is about a hand-edited file.
+  assert.equal(M.parseConfig(CONFIG({ goal: 0 }), null).goal, 1);
+  assert.equal(M.parseConfig(CONFIG({ goal: -10 }), null).goal, 1);
+  assert.equal(M.parseConfig(CONFIG({ goal: 10 ** 9 }), null).goal, M.parseState(
+    JSON.stringify({ schema: 1, goal: 10 ** 9 }), null).goal, "clamped like state");
+});
+
+test("parseConfig: a goal that is not a number falls back", () => {
+  assert.equal(M.parseConfig(CONFIG({ goal: "lots" }), null).goal, 500);
+  assert.equal(M.parseConfig(CONFIG({ goal: null }), null).goal, 500);
+});
+
+test("parseConfig: an unknown mascot keeps the current one", () => {
+  const c = M.parseConfig(CONFIG({ mascot: "dragon" }), null);
+  assert.equal(c.mascot, "bird");
+});
+
+test("parseConfig: an array is not an object", () => {
+  const c = M.parseConfig("[1,2,3]", null);
+  assert.equal(c.loaded, false);
+});
+
+// ------------------------------------------------------- lastFocusedApp
+
+test("parseState: the whitelist candidate arrives verbatim", () => {
+  const s = M.parseState(JSON.stringify({ schema: 1, lastFocusedApp: "md.obsidian.Obsidian" }), null);
+  assert.equal(s.lastFocusedApp, "md.obsidian.Obsidian");
+});
+
+test("parseState: no candidate is an empty string, never undefined", () => {
+  assert.equal(M.parseState(JSON.stringify({ schema: 1 }), null).lastFocusedApp, "");
+  assert.equal(M.parseState(JSON.stringify({ schema: 1, lastFocusedApp: 42 }), null).lastFocusedApp, "");
+});
+
+test("parseState: an absurd app id is capped before it reaches a button", () => {
+  const s = M.parseState(JSON.stringify({ schema: 1, lastFocusedApp: "a".repeat(9000) }), null);
+  assert.equal(s.lastFocusedApp.length, M.APP_ID_MAX);
+});
