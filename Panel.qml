@@ -7,13 +7,30 @@ import "Model.js" as Model
 // Loaded via Loader from BarWidget.qml; deliberately not a manifest entry
 // point.
 //
-// This panel displays and does not configure. Settings live in the engine's
-// config file and are changed with `writing-critter config ...`, so there is
-// one writer for them and the shell is not it. The earlier version edited
-// settings from here, which meant a text field in the bar, a key catcher to
-// feed it, and a write path out of the shell process -- and it is the write
-// path that eventually crashed the desktop. Showing the command is duller and
-// cannot take the session down.
+// This panel configures, but it does not write. Settings live in the engine's
+// config file and every change here is made by invoking `writing-critter
+// config ...`, so that file still has exactly one writer and the shell is
+// still not it.
+//
+// The distinction matters because of how the earlier version failed. It edited
+// settings from here directly, which meant a text field in the bar, a key
+// catcher to feed it, and a write path out of the shell process. What actually
+// crashed the desktop was none of those individually -- it was async work
+// outliving a subtree destroyed by a late-settling binding -- but the write
+// path was how the code got there.
+//
+// So two rules hold this together, and both are enforced by
+// scripts/qml-lifecycle-lint.py:
+//
+//   * Nothing here writes. The engine validates and persists; this panel asks.
+//   * Nothing here owns work that can outlive it. The process, the config read
+//     and the directory scan all live in Control.qml, a singleton, because this
+//     panel is built once per screen and dies on a monitor hotplug.
+//
+// There is also still no text input anywhere, which is why the key catcher
+// below needs no blocking: every value the user can send is picked from a set
+// -- a slider position, a directory they walked to, an app id the engine
+// itself published.
 Panel {
     id: root
     moduleName: "io.github.acero-ad.writing-critter"
@@ -30,6 +47,13 @@ Panel {
     readonly property string mood: hostWidget ? hostWidget.mood : "sleeping"
     readonly property real progress: goal > 0 ? Math.min(1, wordsToday / goal) : 0
     readonly property string restingReason: Critter.StateSource.restingReason
+
+    // The settings view swaps to the directory picker rather than opening a
+    // second surface: one column, one place to look, and nothing to tear down.
+    property bool browsing: false
+
+    // The uncounted app the engine last saw, offered as a one-tap addition.
+    readonly property string candidateApp: Critter.StateSource.lastFocusedApp
 
     readonly property string artText: Model.panelArt(mascot, stage, mood).join("\n")
     readonly property string phrase: Model.statusPhrase(stage, mood)
@@ -283,33 +307,329 @@ Panel {
 
                 Text {
                     width: parent.width
-                    text: "SETTINGS"
+                    text: root.browsing ? "ADD PATH" : "SETTINGS"
                     color: root.barForeground
                     opacity: 0.5
                     font.family: root.bar ? root.bar.fontFamily : Style.font.family
                     font.pixelSize: Style.font.caption
                 }
 
-                // Shown, not edited. The engine owns its config file; giving
-                // the bar a second writer is how settings get lost.
+                // The engine that ships beside this QML could not be started.
+                // Rather than offer controls that quietly do nothing, fall back
+                // to what this panel showed before it had any: the commands.
                 Text {
                     width: parent.width
-                    text: "goal      " + root.goal + " words/day\n"
-                        + "mascot    " + root.mascot + "\n"
-                        + "\n"
-                        + "change with:\n"
+                    visible: !Critter.Control.available
+                    text: "engine not found at\n" + Critter.Control.enginePath + "\n\n"
+                        + "change settings with:\n"
                         + "  writing-critter config set-goal 800\n"
-                        + "  writing-critter config set-mascot snail\n"
                         + "  writing-critter config add-path ~/notes\n"
-                        + "  writing-critter config add-app obsidian\n"
-                        + "\n"
-                        + "see everything:  writing-critter status"
+                        + "  writing-critter config add-app obsidian"
                     color: root.barForeground
                     opacity: 0.75
                     font.family: "monospace"
                     font.pixelSize: Style.font.bodySmall
                     textFormat: Text.PlainText
                     wrapMode: Text.WordWrap
+                }
+
+                // ------------------------------------------------ the picker
+                //
+                // Directories only, and nothing is typed. Every path that can
+                // reach the engine is one the user walked to and confirmed, so
+                // the panel never composes a string on the user's behalf.
+
+                Column {
+                    width: parent.width
+                    spacing: Style.space(6)
+                    visible: root.browsing && Critter.Control.available
+
+                    Text {
+                        width: parent.width
+                        text: Critter.Control.browsePath
+                        color: Color.accent
+                        font.family: "monospace"
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideMiddle
+                    }
+
+                    // A Flow, not a Row: four buttons do not fit a 320px panel
+                    // on every theme's font, and wrapping beats clipping.
+                    Flow {
+                        width: parent.width
+                        spacing: Style.space(6)
+
+                        Button {
+                            text: "Up"
+                            foreground: root.barForeground
+                            bordered: true
+                            enabled: Critter.Control.canGoUp
+                            opacity: enabled ? 1 : 0.4
+                            onClicked: Critter.Control.browseUp()
+                        }
+                        Button {
+                            text: "Home"
+                            foreground: root.barForeground
+                            bordered: true
+                            onClicked: Critter.Control.browseHome()
+                        }
+                        Button {
+                            text: "Use this folder"
+                            foreground: Color.accent
+                            bordered: true
+                            onClicked: {
+                                Critter.Control.run("add-path", Critter.Control.browsePath);
+                                root.browsing = false;
+                            }
+                        }
+                        Button {
+                            text: "Cancel"
+                            foreground: root.barForeground
+                            bordered: true
+                            onClicked: root.browsing = false
+                        }
+                    }
+
+                    // A ListView rather than a Repeater: a directory can hold
+                    // thousands of entries, and this recycles delegates and
+                    // scrolls instead of instantiating all of them.
+                    ListView {
+                        width: parent.width
+                        height: Math.min(contentHeight, Style.space(180))
+                        clip: true
+                        model: Critter.Control.folders
+                        boundsBehavior: Flickable.StopAtBounds
+
+                        delegate: Button {
+                            required property string fileName
+                            width: ListView.view.width
+                            text: fileName
+                            foreground: root.barForeground
+                            fontSize: Style.font.bodySmall
+                            onClicked: Critter.Control.browseInto(fileName)
+                        }
+                    }
+
+                    Text {
+                        width: parent.width
+                        visible: Critter.Control.folders.count === 0
+                        text: "no subdirectories here"
+                        color: root.barForeground
+                        opacity: 0.5
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                    }
+                }
+
+                // ---------------------------------------------- the controls
+
+                Column {
+                    width: parent.width
+                    spacing: Style.space(8)
+                    visible: !root.browsing && Critter.Control.available
+
+                    // ---- goal
+
+                    Text {
+                        width: parent.width
+                        text: "goal   " + (goalSlider.dragging
+                                           ? Math.round(goalSlider.liveValue)
+                                           : Critter.Control.goal) + " words/day"
+                        color: root.barForeground
+                        opacity: 0.8
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                    }
+
+                    PanelSlider {
+                        id: goalSlider
+                        bar: root.bar
+                        width: parent.width
+                        minimum: 100
+                        maximum: 3000
+                        step: 50
+                        integer: true
+                        value: Critter.Control.goal
+                        // On release only. Committing on `moved` would spawn an
+                        // engine process per pixel of drag.
+                        onReleased: function (v) {
+                            Critter.Control.run("set-goal", Math.round(v));
+                        }
+                    }
+
+                    // ---- watch paths
+
+                    Text {
+                        width: parent.width
+                        text: "watch paths"
+                        color: root.barForeground
+                        opacity: 0.5
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                    }
+
+                    Repeater {
+                        model: Critter.Control.watchPaths
+                        delegate: Item {
+                            required property string modelData
+                            width: content.width
+                            height: Style.space(20)
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.right: dropPath.left
+                                anchors.rightMargin: Style.space(4)
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: parent.modelData
+                                color: root.barForeground
+                                opacity: 0.8
+                                font.family: "monospace"
+                                font.pixelSize: Style.font.bodySmall
+                                elide: Text.ElideMiddle
+                            }
+                            PanelActionButton {
+                                id: dropPath
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                iconText: "\uF0159"
+                                tooltipText: "stop watching this folder"
+                                foreground: root.barForeground
+                                hoverColor: Color.urgent
+                                onClicked: Critter.Control.run("remove-path", parent.modelData)
+                            }
+                        }
+                    }
+
+                    Text {
+                        width: parent.width
+                        visible: Critter.Control.watchPaths.length === 0
+                        text: "nothing watched — add a folder to start counting"
+                        color: root.barForeground
+                        opacity: 0.5
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Button {
+                        text: "Add path"
+                        foreground: Color.accent
+                        bordered: true
+                        onClicked: {
+                            Critter.Control.browseHome();
+                            root.browsing = true;
+                        }
+                    }
+
+                    // ---- writing apps
+
+                    Text {
+                        width: parent.width
+                        text: "writing apps"
+                        color: root.barForeground
+                        opacity: 0.5
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                    }
+
+                    Repeater {
+                        model: Critter.Control.whitelist
+                        delegate: Item {
+                            required property string modelData
+                            width: content.width
+                            height: Style.space(20)
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.right: dropApp.left
+                                anchors.rightMargin: Style.space(4)
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: parent.modelData
+                                color: root.barForeground
+                                opacity: 0.8
+                                font.family: "monospace"
+                                font.pixelSize: Style.font.bodySmall
+                                elide: Text.ElideRight
+                            }
+                            PanelActionButton {
+                                id: dropApp
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                iconText: "\uF0159"
+                                tooltipText: "stop counting while this app has focus"
+                                foreground: root.barForeground
+                                hoverColor: Color.urgent
+                                onClicked: Critter.Control.run("remove-app", parent.modelData)
+                            }
+                        }
+                    }
+
+                    // The engine publishes the last app it saw and did not
+                    // count. Offering it is the whole point: the identifier a
+                    // compositor reports is rarely the application's name, so
+                    // this is a string the user could not have typed.
+                    Button {
+                        visible: root.candidateApp.length > 0
+                        text: "Add " + root.candidateApp
+                        foreground: Color.accent
+                        bordered: true
+                        onClicked: Critter.Control.run("add-app", root.candidateApp)
+                    }
+
+                    // ---- mascot
+
+                    Text {
+                        width: parent.width
+                        text: "mascot"
+                        color: root.barForeground
+                        opacity: 0.5
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                    }
+
+                    Flow {
+                        width: parent.width
+                        spacing: Style.space(6)
+
+                        Repeater {
+                            model: Model.mascotIds()
+                            delegate: Button {
+                                required property string modelData
+                                text: modelData
+                                bordered: true
+                                selected: Critter.Control.mascot === modelData
+                                foreground: Critter.Control.mascot === modelData
+                                    ? Color.accent : root.barForeground
+                                onClicked: Critter.Control.run("set-mascot", modelData)
+                            }
+                        }
+                    }
+
+                    // ---- what the engine refused
+
+                    Text {
+                        width: parent.width
+                        visible: Critter.Control.failedAction.length > 0
+                        text: Critter.Control.failedAction + " failed — "
+                              + Critter.Control.failureReason
+                        color: Color.urgent
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                    }
+
+                    // Shown, not editable: the settings above cover what the
+                    // engine exposes as subcommands, and everything else still
+                    // belongs to the config file.
+                    Text {
+                        width: parent.width
+                        text: "everything else:  writing-critter config show"
+                        color: root.barForeground
+                        opacity: 0.5
+                        font.family: "monospace"
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.WordWrap
+                    }
                 }
             }
         }
