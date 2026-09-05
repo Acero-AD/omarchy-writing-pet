@@ -12,7 +12,9 @@ you should be able to audit it without trusting a dependency tree.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
+import fcntl
 import json
 import os
 import re
@@ -150,6 +152,32 @@ class Config:
 
 
 # ----------------------------------------------------------------- atomic io
+
+
+@contextlib.contextmanager
+def config_lock(path: Path):
+    """Serialise read-modify-write of the config file across processes.
+
+    Until the bar panel could change settings, the only writer was a human
+    typing one command at a time and this was unnecessary. Now two clicks a
+    tenth of a second apart are two processes, each doing load -> mutate ->
+    save, and without this the second silently discards the first's change.
+
+    The lock lives in a sibling file rather than on the config itself. Saving
+    replaces the config by rename, so a lock taken on its inode is orphaned the
+    moment the first writer finishes -- a second and third writer would then be
+    holding locks on two different inodes and excluding nobody. The lock file is
+    only ever created, never replaced, so its inode is stable. This is the same
+    trap that orphaned the widget's file watch; see docs/STATE-FILE.md.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path.with_name(path.name + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        # Closing releases the lock, on every path out including an exception.
+        os.close(fd)
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -728,18 +756,27 @@ def read_state(path: Path = None) -> dict[str, Any] | None:
 
 
 def cmd_config(args: argparse.Namespace) -> int:
-    config = Config.load(args.config)
-
+    # Reads need no lock: save() renames into place, so a reader sees a whole
+    # file either way.
     if args.config_action == "show":
-        print(json.dumps(config.values, indent=2, sort_keys=True))
+        print(json.dumps(Config.load(args.config).values, indent=2, sort_keys=True))
         return 0
 
     if args.config_action == "path":
-        print(config.path)
+        print(Config.load(args.config).path)
         return 0
 
-    # Scalars. The bar panel displays these but cannot change them: the engine
-    # owns its config file, and a second writer is how settings get lost.
+    # Everything below mutates. Load inside the lock, not before it: a config
+    # read outside would be stale by the time the lock was granted.
+    with config_lock(args.config):
+        config = Config.load(args.config)
+        return _config_mutate(args, config)
+
+
+def _config_mutate(args: argparse.Namespace, config: Config) -> int:
+    """Apply one mutating config action. Always called holding config_lock."""
+    # Scalars. The panel can now change these, but only by invoking this
+    # command: the engine stays the single writer of the config file.
     if args.config_action == "set-goal":
         try:
             goal = int(args.value)

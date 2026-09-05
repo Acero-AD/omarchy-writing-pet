@@ -2,10 +2,12 @@
 """Engine tests. Standard library only, no desktop, no shell, no network."""
 
 import argparse
+import fcntl
 import importlib.machinery
 import importlib.util
 import os
 import json
+import subprocess
 import sys
 import tempfile
 import time
@@ -586,6 +588,81 @@ class TestConfigReload(TempConfig):
         first = cfg.mtime()
         os.utime(self.path, (first + 10, first + 10))
         self.assertNotEqual(cfg.mtime(), first)
+
+
+class TestConfigLocking(TempConfig):
+    """The panel can issue config changes faster than a human can type.
+
+    Before the bar could change settings this did not matter: one person at one
+    terminal cannot race themselves. Now a burst of clicks is a burst of
+    processes, each doing load -> mutate -> save.
+    """
+
+    ENGINE = str(Path(__file__).resolve().parent.parent / "bin" / "writing-critter")
+
+    def test_concurrent_adds_do_not_lose_updates(self):
+        # Real processes, started without waiting on each other, so they
+        # genuinely overlap. Without the lock this loses most of the entries.
+        names = [f"app{i}.Test" for i in range(8)]
+        procs = [
+            subprocess.Popen(
+                [sys.executable, self.ENGINE, "--config", str(self.path),
+                 "config", "add-app", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            )
+            for name in names
+        ]
+        for proc in procs:
+            _, err = proc.communicate(timeout=30)
+            self.assertEqual(proc.returncode, 0, err.decode())
+
+        stored = engine.Config.load(self.path).values["whitelist"]
+        missing = [n for n in names if n not in stored]
+        self.assertEqual(missing, [], f"lost {len(missing)} of {len(names)} concurrent adds")
+
+    def test_lock_file_is_not_the_config_file(self):
+        # Saving replaces the config by rename. A lock held on that inode would
+        # be orphaned the moment the first writer finished, so the lock must
+        # live somewhere that is never replaced.
+        self.assertEqual(engine.main(["--config", str(self.path), "config", "add-app", "kate"]), 0)
+        lock = self.path.with_name(self.path.name + ".lock")
+        self.assertTrue(lock.exists())
+        self.assertEqual(lock.stat().st_size, 0)
+
+    def test_config_error_inside_the_lock_still_exits_two(self):
+        self.write("{ this is not json")
+        code = engine.main(["--config", str(self.path), "config", "add-app", "kate"])
+        self.assertEqual(code, 2)
+        self.assertEqual(self.path.read_text(), "{ this is not json",
+                         "a config we could not parse must never be overwritten")
+
+    def test_lock_is_released_after_a_failure(self):
+        self.write("{ this is not json")
+        engine.main(["--config", str(self.path), "config", "add-app", "kate"])
+        # Non-blocking, so a leaked lock fails the test instead of hanging it.
+        fd = os.open(self.path.with_name(self.path.name + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.fail("config lock was not released after ConfigError")
+        finally:
+            os.close(fd)
+
+    def test_reads_do_not_take_the_lock(self):
+        # `config path` must work while a writer holds the lock; it is what a
+        # user reaches for when something is wrong.
+        engine.main(["--config", str(self.path), "config", "add-app", "kate"])
+        fd = os.open(self.path.with_name(self.path.name + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            proc = subprocess.run(
+                [sys.executable, self.ENGINE, "--config", str(self.path), "config", "path"],
+                capture_output=True, timeout=15,
+            )
+            self.assertEqual(proc.returncode, 0)
+            self.assertIn(str(self.path), proc.stdout.decode())
+        finally:
+            os.close(fd)
 
 
 if __name__ == "__main__":
