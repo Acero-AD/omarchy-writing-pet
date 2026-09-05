@@ -665,5 +665,71 @@ class TestConfigLocking(TempConfig):
             os.close(fd)
 
 
+class TestWhitelistCandidate(TempConfig):
+    """The panel offers an app to whitelist; the engine is the only thing that
+    knows its exact id. Getting `md.obsidian.Obsidian` wrong as `obsidian` is
+    the mistake this field exists to prevent."""
+
+    def build(self, whitelist=("kate",)):
+        self.write(json.dumps({"whitelist": list(whitelist), "graceSeconds": 0}))
+        cfg = engine.Config.load(self.path)
+        eng = engine.Engine(cfg, engine.Log(enabled=False))
+        eng.state_path = Path(self.dir.name) / "state.json"
+        return eng
+
+    def test_uncounted_app_is_published_verbatim(self):
+        eng = self.build()
+        eng.set_focus("md.obsidian.Obsidian")
+        eng.write_state()
+        published = json.loads(eng.state_path.read_text())
+        self.assertEqual(published["lastFocusedApp"], "md.obsidian.Obsidian")
+
+    def test_a_counted_app_does_not_become_the_candidate(self):
+        eng = self.build()
+        eng.set_focus("md.obsidian.Obsidian")
+        eng.set_focus("kate")  # whitelisted, so it must not displace the offer
+        self.assertEqual(eng.candidate_app(), "md.obsidian.Obsidian")
+
+    def test_whitelisting_the_candidate_retires_it(self):
+        eng = self.build()
+        eng.set_focus("md.obsidian.Obsidian")
+        self.assertEqual(eng.candidate_app(), "md.obsidian.Obsidian")
+        eng.config.values["whitelist"].append("md.obsidian.Obsidian")
+        self.assertEqual(eng.candidate_app(), "",
+                         "an app that is now counted must not still be offered")
+
+    def test_dot_segment_matching_retires_it_too(self):
+        # add-app "obsidian" matches md.obsidian.Obsidian by dot segment, so the
+        # offer must clear even though the strings differ.
+        eng = self.build(whitelist=("kate", "obsidian"))
+        eng.set_focus("md.obsidian.Obsidian")
+        self.assertEqual(eng.candidate_app(), "")
+
+    def test_nothing_to_offer_is_an_empty_string(self):
+        eng = self.build()
+        eng.write_state()
+        self.assertEqual(json.loads(eng.state_path.read_text())["lastFocusedApp"], "")
+
+    def test_focusing_the_desktop_does_not_clear_the_offer(self):
+        # Hyprland emits an empty class when no window has focus.
+        eng = self.build()
+        eng.set_focus("md.obsidian.Obsidian")
+        eng.set_focus("")
+        self.assertEqual(eng.candidate_app(), "md.obsidian.Obsidian")
+
+    def test_the_field_is_a_single_value_not_a_history(self):
+        eng = self.build()
+        for app in ("one.App", "two.App", "three.App"):
+            eng.set_focus(app)
+        eng.write_state()
+        published = json.loads(eng.state_path.read_text())
+        self.assertEqual(published["lastFocusedApp"], "three.App")
+        self.assertIsInstance(published["lastFocusedApp"], str)
+        # No trace of what came before, and nothing timestamped.
+        blob = json.dumps(published)
+        self.assertNotIn("one.App", blob)
+        self.assertNotIn("two.App", blob)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

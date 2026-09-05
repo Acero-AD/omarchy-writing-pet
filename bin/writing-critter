@@ -450,6 +450,14 @@ class Engine:
         self.config = config
         self.log = log
         self.focused_app: str = ""
+        # The most recent focused app that is NOT whitelisted. Published so the
+        # bar can offer it as a one-tap addition: the appId Hyprland matches on
+        # is a reverse-DNS string like "md.obsidian.Obsidian", which nobody
+        # guesses and which cost real debugging time to discover by hand.
+        #
+        # One value, never a list, and no timestamps. A history of what was
+        # focused and when is an activity log, and this plugin does not keep one.
+        self.last_uncounted_app: str = ""
         self.last_writing_at: float = 0.0
         self._gate_open: bool = False
         self.state_path = STATE_PATH  # setter derives tracking_path
@@ -499,6 +507,8 @@ class Engine:
         self.focused_app = app_id
         if self.writing_focused():
             self.last_writing_at = now
+        elif app_id:
+            self.last_uncounted_app = app_id
         self._gate_open = self.gate_open(now)
         if self._gate_open != was_open:
             self.log("gate." + ("open" if self._gate_open else "closed"), app=app_id or "(none)")
@@ -511,6 +521,18 @@ class Engine:
                 state = "open (grace)"
             self.log("focus.change", app=app_id or "(none)", gate=state)
         return False
+
+    def candidate_app(self) -> str:
+        """The uncounted app worth offering, or "" when there is none.
+
+        Checked at publish rather than on config reload so that whitelisting the
+        candidate -- by any route, including a terminal -- retires it without
+        the reload path having to remember to.
+        """
+        if self.last_uncounted_app and app_in_list(
+                self.config.values["whitelist"], self.last_uncounted_app):
+            self.last_uncounted_app = ""
+        return self.last_uncounted_app
 
     def refresh_gate(self, now: float | None = None) -> bool:
         """Re-evaluate without a focus change, so the grace window can expire."""
@@ -552,6 +574,7 @@ class Engine:
             "history": self.history[-HISTORY_MAX:],
             "mascot": self.config.values["mascot"],
             "gateOpen": self._gate_open,
+            "lastFocusedApp": self.candidate_app(),
             "updatedAt": time.time(),
         }
         write_atomic(self.state_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")

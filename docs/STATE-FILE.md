@@ -26,6 +26,7 @@ falling back to `~/.local/state/writing-critter/state.json` when
   "history": [ { "date": "2026-09-01", "words": 980, "goal": 500 } ],
   "mascot": "bird",
   "gateOpen": true,
+  "lastFocusedApp": "md.obsidian.Obsidian",
   "updatedAt": 1788363011.42
 }
 ```
@@ -40,7 +41,18 @@ falling back to `~/.local/state/writing-critter/state.json` when
 | `history` | Recent finished days, oldest first, capped at 365. |
 | `mascot` | Which mascot set the user chose. |
 | `gateOpen` | Whether counting is currently active — a writing app is focused, or was within the grace window. |
+| `lastFocusedApp` | The most recently focused application that is **not** whitelisted, exactly as the engine matched it, or `""` when there is none. Offer it as a one-tap addition; do not display it as activity. |
 | `updatedAt` | Unix seconds of the last write. This is how you detect a stopped engine. A running engine refreshes it at least every 30 seconds even when nothing is being written, so treat silence beyond about 90 seconds as stopped. |
+
+`lastFocusedApp` exists for one reason: the identifier a compositor reports is
+often nothing like the application's name — Obsidian is `md.obsidian.Obsidian` —
+so a user cannot reliably type it and a front-end cannot reliably guess it. The
+engine already compares against it on every focus change, so it publishes it.
+
+It is deliberately a single value with no timestamp, and it is cleared as soon
+as that application is whitelisted by any route. A list of what was focused and
+when would be an activity log; this plugin does not keep one, and a front-end
+must not reconstruct one by sampling this field.
 
 Per-file bookkeeping lives in a sibling `tracking.json`, not here. It is the
 bulk of the data — on a 267-note vault it was 99% of a combined file — and it
