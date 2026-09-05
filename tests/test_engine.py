@@ -822,5 +822,38 @@ class TestFocusReportsGateTransitions(TempConfig):
                       "still open within the grace window, so nothing changed")
 
 
+class TestPollSetting(TempConfig):
+    """The scan interval is tunable because it is half of the perceived delay.
+
+    The other half is the widget's own poll of state.json; the two sit in
+    series, so what a user feels after saving is the sum.
+    """
+
+    def run_cli(self, *argv):
+        return engine.main(["--config", str(self.path), *argv])
+
+    def test_setting_the_poll_interval(self):
+        self.assertEqual(self.run_cli("config", "set-poll", "1"), 0)
+        self.assertEqual(engine.Config.load(self.path).poll_seconds, 1)
+
+    def test_out_of_range_is_refused_and_nothing_is_written(self):
+        self.run_cli("config", "set-poll", "2")
+        for bad in ("0", "31", "-1"):
+            self.assertEqual(self.run_cli("config", "set-poll", bad), 1, bad)
+        self.assertEqual(engine.Config.load(self.path).poll_seconds, 2,
+                         "a refused value must leave the setting alone")
+
+    def test_a_non_number_is_refused(self):
+        self.assertEqual(self.run_cli("config", "set-poll", "fast"), 1)
+
+    def test_lookback_still_exceeds_the_poll_at_the_new_default(self):
+        # A lookback shorter than the poll drops a save that lands on a tick
+        # boundary, so the accessor keeps it ahead. Worth pinning now that the
+        # default poll has moved.
+        cfg = engine.Config.load(self.path)
+        self.assertEqual(cfg.poll_seconds, 1)
+        self.assertGreater(cfg.lookback_seconds, cfg.poll_seconds)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

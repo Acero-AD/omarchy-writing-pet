@@ -69,7 +69,12 @@ DEFAULTS: dict[str, Any] = {
         "apostrophe",
     ],
     "graceSeconds": 15,
-    "pollSeconds": 2,
+    # One second, not two. Two independent polls sit in series between a save
+    # and the bar -- this one and the widget's own read of state.json -- so the
+    # perceived delay is the sum, and halving each halves the sum. A scan is an
+    # os.scandir with an mtime filter; on a 267-note vault it is well under a
+    # millisecond of work per tick.
+    "pollSeconds": 1,
     "lookbackSeconds": 3,
     "recountCap": 200,
     "netMode": "additive",
@@ -857,6 +862,21 @@ def _config_mutate(args: argparse.Namespace, config: Config) -> int:
         print(f"goal: {goal} words/day")
         return 0
 
+    if args.config_action == "set-poll":
+        try:
+            seconds = int(args.value)
+        except ValueError:
+            print(f"poll must be a whole number of seconds, not {args.value!r}", file=sys.stderr)
+            return 1
+        if not POLL_MIN <= seconds <= POLL_MAX:
+            print(f"poll must be between {POLL_MIN} and {POLL_MAX} seconds", file=sys.stderr)
+            return 1
+        config.values["pollSeconds"] = seconds
+        config.validate()
+        config.save()
+        print(f"poll: every {seconds}s")
+        return 0
+
     if args.config_action == "set-mascot":
         known = sorted(MASCOTS)
         if args.value not in known:
@@ -916,7 +936,8 @@ def build_parser() -> argparse.ArgumentParser:
     cfgsub.add_parser("path", help="print the config file path")
     for action, meta in (("add-path", "DIR"), ("remove-path", "DIR"),
                          ("add-app", "APPID"), ("remove-app", "APPID"),
-                         ("set-goal", "WORDS"), ("set-mascot", "NAME")):
+                         ("set-goal", "WORDS"), ("set-mascot", "NAME"),
+                         ("set-poll", "SECONDS")):
         sp = cfgsub.add_parser(action, help=f"{action.replace('-', ' ')}")
         sp.add_argument("value", metavar=meta)
     return p

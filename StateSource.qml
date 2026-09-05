@@ -93,10 +93,12 @@ Singleton {
     // measured, not assumed. Atomic writes are not negotiable (a reader must
     // never see a torn file), so the reader polls instead.
     //
-    // A blocking 210-byte read every two seconds is free, and matches the
-    // engine's own cadence so the bar is never more than a tick behind.
+    // A blocking 210-byte read every second is free, and matches the engine's
+    // own cadence so the bar is never more than a tick behind. It is one second
+    // rather than two because this poll and the engine's sit in series: what a
+    // user perceives after saving is the sum of both, so each one counts twice.
     Timer {
-        interval: 2000
+        interval: 1000
         running: true
         repeat: true
         onTriggered: {

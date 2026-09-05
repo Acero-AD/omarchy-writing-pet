@@ -152,6 +152,7 @@ writing-critter config add-path ~/notes
 writing-critter config remove-path ~/notes
 writing-critter config add-app md.obsidian.Obsidian
 writing-critter config remove-app md.obsidian.Obsidian
+writing-critter config set-poll 1
 ```
 
 Changes made here appear in an open panel within a couple of seconds, and a
@@ -171,7 +172,7 @@ it.
 | `whitelist` | `omawrite, obsidian, typora, soffice, libreoffice-writer, ghostwriter, apostrophe` | Apps that wake the critter. Matched on whole dot-separated segments, so `obsidian` matches `md.obsidian.Obsidian`. |
 | `mascot` | `bird` | `bird` or `snail` |
 | `graceSeconds` | `15` | Keep counting this long after focus leaves, so an autosave that lands just after you alt-tab still counts |
-| `pollSeconds` | `2` | Scan interval, clamped 1–30 |
+| `pollSeconds` | `1` | Scan interval, clamped 1–30. Half of the delay between saving and seeing the count move; the widget's own poll of `state.json` is the other half, and the two are in series. |
 | `lookbackSeconds` | `3` | Modification window per scan; always at least one poll longer than `pollSeconds` |
 | `recountCap` | `200` | Most files re-read in a single cycle |
 | `netMode` | `additive` | `net` makes deletions subtract |
