@@ -21,8 +21,27 @@ ACTIVE_BINDING = re.compile(r"^\s*active:\s*(.+?)\s*$")
 # Rule 3 allows exactly one program: the plugin's own engine. Anything else in
 # the shell process is the architecture leaking back in.
 ALLOWED_PROGRAMS = {"writing-critter"}
+FOCUSABLE_INPUT = re.compile(
+    r"^\s*(?:NumberField|TextField|TextInput|SpinBox|QQC\.(?:TextField|SpinBox))\s*\{",
+    re.M,
+)
 
 failures = []
+
+
+def block_bodies(source: str, type_name: str):
+    """Yield (line number, body) for simple balanced QML object blocks."""
+    pattern = re.compile(rf"^\s*{re.escape(type_name)}\s*\{{", re.M)
+    for match in pattern.finditer(source):
+        depth = 1
+        i = match.end()
+        while i < len(source) and depth:
+            if source[i] == "{":
+                depth += 1
+            elif source[i] == "}":
+                depth -= 1
+            i += 1
+        yield source[:match.start()].count("\n") + 1, source[match.end():i]
 
 
 def command_program(line: str, source: str) -> tuple[str | None, str]:
@@ -160,6 +179,33 @@ def check(path: Path) -> None:
         depth += line.count("{") - line.count("}")
         while depth_stack and depth <= depth_stack[-1][1]:
             depth_stack.pop()
+
+    # Monospace Text commonly carries column-aligned ASCII whose trailing
+    # spaces are structural. Qt trims those spaces before centring each line,
+    # so AlignHCenter silently shears the grid row by row.
+    for lineno, body in block_bodies(source, "Text"):
+        if (re.search(r'^\s*font\.family:\s*["\']monospace["\']\s*$', body, re.M)
+                and re.search(r"^\s*horizontalAlignment:\s*Text\.AlignHCenter\s*$", body, re.M)):
+            failures.append(
+                f"{path.name}:{lineno}: monospace Text uses Text.AlignHCenter.\n"
+                f"    Qt trims trailing whitespace before centring each line, which\n"
+                f"    shears fixed-column text. Left-align it inside a sized canvas."
+            )
+
+    # PanelKeyCatcher runs BeforeItem and will otherwise consume keystrokes
+    # before a descendant editor sees them. A focusable input and the catcher
+    # therefore form a required pair with an active-focus blocked binding.
+    if FOCUSABLE_INPUT.search(source):
+        catchers = list(block_bodies(source, "PanelKeyCatcher"))
+        guarded = any(re.search(r"^\s*blocked:\s*.*activeFocus\s*$", body, re.M)
+                      for _, body in catchers)
+        if not guarded:
+            lineno = source[:FOCUSABLE_INPUT.search(source).start()].count("\n") + 1
+            failures.append(
+                f"{path.name}:{lineno}: focusable input without a PanelKeyCatcher\n"
+                f"    `blocked` binding to activeFocus. A BeforeItem catcher would\n"
+                f"    swallow the input's keystrokes."
+            )
 
 
 def check_blocking_reads(path: Path) -> None:

@@ -184,6 +184,47 @@ Singleton {
 ''', "blockLoading")
 
 
+class TestPresentationAndInputRules(LintCase):
+    def test_centered_monospace_text_is_rejected(self):
+        self.assertRejected(PLAIN + '''
+Item {
+    Text {
+        font.family: "monospace"
+        horizontalAlignment: Text.AlignHCenter
+    }
+}
+''', "trims trailing whitespace")
+
+    def test_left_aligned_monospace_text_is_allowed(self):
+        self.assertAccepted(PLAIN + '''
+Item {
+    Text {
+        font.family: "monospace"
+        horizontalAlignment: Text.AlignLeft
+    }
+}
+''')
+
+    def test_focusable_input_without_blocked_catcher_is_rejected(self):
+        self.assertRejected(PLAIN + '''
+Item {
+    PanelKeyCatcher { }
+    NumberField { }
+}
+''', "focusable input")
+
+    def test_focusable_input_with_blocked_catcher_is_allowed(self):
+        self.assertAccepted(PLAIN + '''
+Item {
+    property var goalField
+    PanelKeyCatcher {
+        blocked: goalField.field.activeFocus
+    }
+    NumberField { }
+}
+''')
+
+
 class TestKnownBlindSpots(LintCase):
     """The linter is line-oriented, not a QML parser, and its docstring says so.
 
