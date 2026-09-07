@@ -138,24 +138,40 @@ Panel {
                     horizontalAlignment: Text.AlignHCenter
                 }
 
-                // The one element that must not inherit the theme family: the
-                // art is column-aligned and a proportional font shreds it.
-                Text {
+                Item {
                     width: parent.width
-                    text: root.artText
-                    color: Color.accent
-                    font.family: "monospace"
-                    font.pixelSize: Style.font.body
-                    textFormat: Text.PlainText
-                    horizontalAlignment: Text.AlignHCenter
-                    lineHeight: 1.15
-                    // No explicit height. It used to reserve
-                    // `font.body * 1.15 * rows`, which clipped the last row --
-                    // the bird's feet -- into the count below it, because QML's
-                    // lineHeight is proportional to the font's natural line
-                    // height (ascent + descent + leading), not to pixelSize.
-                    // Nothing needs reserving anyway: every set renders exactly
-                    // `rows` lines at every stage, asserted in the model tests.
+                    height: art.implicitHeight
+
+                    // Centre one declared-width canvas, then draw every row
+                    // from its left edge. Qt trims trailing whitespace before
+                    // centring each line, so AlignHCenter shears column-aligned
+                    // art even though the model pads every row correctly.
+                    Text {
+                        id: art
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: root.mascotSet.cols * artMetrics.advanceWidth
+                        text: root.artText
+                        color: Color.accent
+                        font.family: "monospace"
+                        font.pixelSize: Style.font.body
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        lineHeight: 1.15
+                        // No explicit height. It used to reserve
+                        // `font.body * 1.15 * rows`, which clipped the last row
+                        // -- the bird's feet -- into the count below it,
+                        // because QML's lineHeight is proportional to the
+                        // font's natural line height (ascent + descent +
+                        // leading), not to pixelSize. Nothing needs reserving
+                        // anyway: every set renders exactly `rows` lines at
+                        // every stage, asserted in the model tests.
+                    }
+
+                    TextMetrics {
+                        id: artMetrics
+                        font: art.font
+                        text: "0"
+                    }
                 }
 
                 Text {

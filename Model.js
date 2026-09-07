@@ -201,6 +201,23 @@ function barFace(setId, stage, mood) {
   return set.barFrames[clampStage(stage)].split("{eyes}").join(eyes) + fx;
 }
 
+// Compose the bar label without ever leaving the face's mood cell as trailing
+// whitespace. Qt trims that cell before centring a bare face, which otherwise
+// moves the critter sideways as its mood changes. When the counter follows,
+// keep the cell as part of the fixed-width gap; disabling the sleeping `z`
+// drops it and adds the same column back to the separator.
+function barLabel(face, counter, vertical, showNumbers, idleNudge) {
+  var text = String(face || "");
+  var body = text.slice(0, Math.max(0, text.length - 1));
+  var fx = text.length > 0 ? text.slice(-1) : "";
+  var hasCounter = !vertical && showNumbers;
+
+  if (!hasCounter) return body.replace(/\s+$/, "");
+
+  var showFx = idleNudge || fx !== FX.sleeping;
+  return body + (showFx ? fx + "  " : "   ") + String(counter || "");
+}
+
 function panelArt(setId, stage, mood) {
   var set = mascotSet(setId);
   var eyes = EYES_WIDE[mood] || EYES_WIDE.idle;
@@ -447,6 +464,7 @@ if (typeof module !== "undefined" && module.exports) {
     mascotSet: mascotSet,
     mascotIds: mascotIds,
     barFace: barFace,
+    barLabel: barLabel,
     panelArt: panelArt,
     statusPhrase: statusPhrase,
     STATE_SCHEMA: STATE_SCHEMA,

@@ -45,21 +45,16 @@ BarWidget {
     readonly property bool showNumbers: setting("showNumbers", true)
     readonly property bool idleNudge: setting("idleNudge", true)
 
-    // The z is the only nudge in the plugin; disabling it must not also open
-    // the critter's eyes, so the mood itself is untouched.
-    readonly property string face: {
-        var f = Model.barFace(mascot, stage, mood);
-        if (!idleNudge && mood === "sleeping")
-            f = f.slice(0, f.length - 1) + " ";
-        return f;
-    }
+    readonly property string face: Model.barFace(mascot, stage, mood)
 
     readonly property string counter: wordsToday + "/" + goal
 
     // Vertical bars are 28px wide -- a face plus a counter does not fit, so the
-    // numbers move to the tooltip and the face rotates.
-    readonly property string label: vertical ? face
-                                             : (showNumbers ? face + "  " + counter : face)
+    // numbers move to the tooltip and the face rotates. Model.barLabel also
+    // removes a trailing mood cell when the face stands alone, because Qt
+    // trims a whitespace cell before centring and would make the face twitch.
+    readonly property string label: Model.barLabel(face, counter, vertical,
+                                                   showNumbers, idleNudge)
 
     readonly property real progressPercent: goal > 0 ? Math.min(100, (wordsToday / goal) * 100) : 0
 

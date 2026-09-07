@@ -79,6 +79,44 @@ test("stage changes never alter rendered width", () => {
   }
 });
 
+test("barLabel never ends in whitespace", () => {
+  for (const id of M.mascotIds()) {
+    for (let stage = 0; stage < M.STAGE_COUNT; stage++) {
+      for (const mood of MOODS) {
+        const face = M.barFace(id, stage, mood);
+        for (const vertical of [false, true]) {
+          for (const showNumbers of [false, true]) {
+            for (const idleNudge of [false, true]) {
+              const label = M.barLabel(face, "421/500", vertical,
+                showNumbers, idleNudge);
+              assert.ok(!/\s$/.test(label),
+                `${id} s${stage} ${mood}: label ends in whitespace`);
+            }
+          }
+        }
+      }
+    }
+  }
+});
+
+test("barLabel width is stable across moods for a fixed configuration", () => {
+  for (const id of M.mascotIds()) {
+    for (let stage = 0; stage < M.STAGE_COUNT; stage++) {
+      for (const vertical of [false, true]) {
+        for (const showNumbers of [false, true]) {
+          for (const idleNudge of [false, true]) {
+            const widths = new Set(MOODS.map((mood) => M.barLabel(
+              M.barFace(id, stage, mood), "421/500", vertical,
+              showNumbers, idleNudge).length));
+            assert.equal(widths.size, 1,
+              `${id} s${stage}: label width varies by mood`);
+          }
+        }
+      }
+    }
+  }
+});
+
 test("both shipped sets exist and bird is the default", () => {
   assert.deepEqual(M.mascotIds().sort(), ["bird", "snail"]);
   assert.equal(M.MASCOT_DEFAULT, "bird");
