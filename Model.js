@@ -263,6 +263,7 @@ function statusPhrase(stage, mood) {
 
 var STATE_SCHEMA = 1;
 var WORD_MAX = 10000000;
+var INT_MAX = 2147483647;
 
 function clampInt(value, min, max, fallback) {
   if (typeof value !== "number" || !isFinite(value)) return fallback;
@@ -339,7 +340,7 @@ function parseState(raw, previous) {
   }
 
   next.wordsToday = clampInt(parsed.wordsToday, 0, WORD_MAX, prev.wordsToday);
-  next.goal = clampInt(parsed.goal, 1, WORD_MAX, prev.goal);
+  next.goal = clampInt(parsed.goal, 1, INT_MAX, prev.goal);
   next.gateOpen = parsed.gateOpen === true;
   next.updatedAt = (typeof parsed.updatedAt === "number" && isFinite(parsed.updatedAt))
     ? parsed.updatedAt : 0;
@@ -365,7 +366,7 @@ function parseState(raw, previous) {
       var entry = parsed.history[i];
       if (!entry || typeof entry !== "object" || typeof entry.date !== "string") continue;
       var words = clampInt(entry.words, 0, WORD_MAX, -1);
-      var dayGoal = clampInt(entry.goal, 1, WORD_MAX, -1);
+      var dayGoal = clampInt(entry.goal, 1, INT_MAX, -1);
       if (words < 0 || dayGoal < 0) continue;
       history.push({ date: entry.date, words: words, goal: dayGoal });
     }
@@ -440,7 +441,10 @@ function parseConfig(raw, previous) {
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return next;
 
-  next.goal = clampInt(parsed.goal, 1, WORD_MAX, prev.goal);
+  // QML exposes the goal as an `int`, so its type limit is the only upper
+  // bound the panel may impose. The engine itself accepts every positive
+  // integer and the former WORD_MAX clamp silently narrowed that contract.
+  next.goal = clampInt(parsed.goal, 1, INT_MAX, prev.goal);
   next.watch = stringList(parsed.watch);
   next.whitelist = stringList(parsed.whitelist);
   if (MASCOTS[parsed.mascot]) next.mascot = parsed.mascot;
@@ -468,6 +472,7 @@ if (typeof module !== "undefined" && module.exports) {
     panelArt: panelArt,
     statusPhrase: statusPhrase,
     STATE_SCHEMA: STATE_SCHEMA,
+    INT_MAX: INT_MAX,
     RESTING: RESTING,
     clampInt: clampInt,
     defaultState: defaultState,

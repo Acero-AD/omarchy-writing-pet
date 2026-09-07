@@ -213,6 +213,11 @@ test("hostile numbers are clamped, not trusted", () => {
   assert.equal(s.gateOpen, false, "only a real boolean opens the gate");
 });
 
+test("state preserves goals across the QML int range", () => {
+  const s = M.parseState(JSON.stringify({ schema: 1, goal: 10 ** 9 }), null);
+  assert.equal(s.goal, 10 ** 9);
+});
+
 test("a wrong-typed field falls back without discarding the others", () => {
   const s = M.parseState(JSON.stringify({
     schema: 1, wordsToday: "many", goal: 800, gateOpen: true
@@ -318,14 +323,13 @@ test("parseConfig: a pathological config cannot produce an unbounded panel", () 
   assert.ok(widest <= M.PATH_MAX);
 });
 
-test("parseConfig: a goal outside the range is clamped, not rejected", () => {
-  // Same convention parseState uses: a number is pulled into range, and only a
-  // non-number falls back. The engine will not write either of these -- it
-  // validates goal >= 1 -- so this is about a hand-edited file.
+test("parseConfig: a goal uses the QML int range without a policy ceiling", () => {
+  // The engine validates goal >= 1 and has no upper policy bound. The panel's
+  // only ceiling is the integer type it must render through QML.
   assert.equal(M.parseConfig(CONFIG({ goal: 0 }), null).goal, 1);
   assert.equal(M.parseConfig(CONFIG({ goal: -10 }), null).goal, 1);
-  assert.equal(M.parseConfig(CONFIG({ goal: 10 ** 9 }), null).goal, M.parseState(
-    JSON.stringify({ schema: 1, goal: 10 ** 9 }), null).goal, "clamped like state");
+  assert.equal(M.parseConfig(CONFIG({ goal: 10 ** 9 }), null).goal, 10 ** 9);
+  assert.equal(M.parseConfig(CONFIG({ goal: M.INT_MAX + 1 }), null).goal, M.INT_MAX);
 });
 
 test("parseConfig: a goal that is not a number falls back", () => {

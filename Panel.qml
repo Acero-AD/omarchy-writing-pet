@@ -27,10 +27,11 @@ import "Model.js" as Model
 //     and the directory scan all live in Control.qml, a singleton, because this
 //     panel is built once per screen and dies on a monitor hotplug.
 //
-// There is also still no text input anywhere, which is why the key catcher
-// below needs no blocking: every value the user can send is picked from a set
-// -- a slider position, a directory they walked to, an app id the engine
-// itself published.
+// The goal is the one typed value: a NumberField constrains it to the engine's
+// positive-integer rule and sends it through the same engine command as every
+// other setting. While that field has focus, PanelKeyCatcher is blocked so its
+// BeforeItem handler cannot swallow the edit. Paths, application ids and the
+// mascot still come only from values the panel was given.
 Panel {
     id: root
     moduleName: "io.github.acero-ad.writing-critter"
@@ -114,10 +115,7 @@ Panel {
         PanelKeyCatcher {
             id: keyCatcher
             anchors.fill: parent
-            // Nothing here is typed into any more, so nothing needs to block
-            // this catcher. That was a real bug once: Keys.priority is
-            // BeforeItem, so an unblocked catcher swallows every keystroke and
-            // an inline field can never receive one.
+            blocked: goalField.field.activeFocus
             onCloseRequested: root.close()
             onTabRequested: function (direction) {
                 root.switchPanel(direction);
@@ -446,30 +444,46 @@ Panel {
 
                     // ---- goal
 
-                    Text {
+                    NumberField {
+                        id: goalField
                         width: parent.width
-                        text: "goal   " + (goalSlider.dragging
-                                           ? Math.round(goalSlider.liveValue)
-                                           : Critter.Control.goal) + " words/day"
-                        color: root.barForeground
-                        opacity: 0.8
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
+                        fieldWidth: width
+                        label: "goal (words/day)"
+                        from: 1
+                        to: Model.INT_MAX
+                        stepSize: 10
+                        value: Critter.Control.goal
+                        foreground: root.barForeground
+                        accent: Color.accent
+                        fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+
+                        onModified: function (v) {
+                            Critter.Control.queueGoal(v);
+                        }
+
+                        // PanelKeyCatcher is blocked while this field owns
+                        // focus, so Escape arrives here first. Release focus;
+                        // the next Escape reaches the catcher and closes.
+                        Keys.onEscapePressed: function (event) {
+                            goalField.field.focus = false;
+                            keyCatcher.forceActiveFocus();
+                            event.accepted = true;
+                        }
                     }
 
-                    PanelSlider {
-                        id: goalSlider
-                        bar: root.bar
-                        width: parent.width
-                        minimum: 100
-                        maximum: 3000
-                        step: 50
-                        integer: true
-                        value: Critter.Control.goal
-                        // On release only. Committing on `moved` would spawn an
-                        // engine process per pixel of drag.
-                        onReleased: function (v) {
-                            Critter.Control.run("set-goal", Math.round(v));
+                    Connections {
+                        target: Critter.Control
+                        function onGoalChanged() {
+                            if (!goalField.field.activeFocus)
+                                goalField.field.value = Critter.Control.goal;
+                        }
+                    }
+
+                    Connections {
+                        target: goalField.field
+                        function onActiveFocusChanged() {
+                            if (!goalField.field.activeFocus)
+                                goalField.field.value = Critter.Control.goal;
                         }
                     }
 

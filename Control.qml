@@ -132,7 +132,24 @@ Singleton {
     property string failedAction: ""
     property string failureReason: ""
 
+    // Goal edits are the only repeated action. Each accepted write makes the
+    // engine reseed file baselines, so keep only the value the field settles
+    // on instead of launching one process per stepper repeat or typed digit.
+    property int pendingGoal: root.goal
+
+    function queueGoal(value) {
+        root.pendingGoal = value;
+        goalDebounce.restart();
+    }
+
+    Timer {
+        id: goalDebounce
+        interval: 400
+        onTriggered: root.run("set-goal", root.pendingGoal)
+    }
+
     readonly property bool busy: root.inflight || root.pending.length > 0
+                                 || goalDebounce.running
 
     function run(action, value) {
         if (root.actions.indexOf(action) === -1) {
