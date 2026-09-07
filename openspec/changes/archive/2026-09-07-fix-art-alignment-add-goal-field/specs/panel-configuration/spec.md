@@ -1,62 +1,4 @@
-# panel-configuration Specification
-
-## Purpose
-TBD - created by archiving change add-panel-config-controls. Update Purpose after archive.
-## Requirements
-### Requirement: Settings are applied from the panel, not merely printed
-The panel SHALL offer controls that change the daily goal, the watch paths, the
-whitelisted writing applications, and the mascot. Each control MUST commit by
-invoking the engine's existing configuration subcommands. The panel MUST NOT
-write the configuration file, and MUST NOT introduce configuration semantics the
-command line does not already have.
-
-#### Scenario: A setting changes from the panel alone
-- **WHEN** the user adjusts a setting in the panel
-- **THEN** the engine's configuration is updated and the running engine applies it without the user opening a terminal
-
-#### Scenario: The command line stays sufficient
-- **WHEN** the panel's controls are compared against the engine's subcommands
-- **THEN** every control maps onto a subcommand that already exists, and no subcommand is added for the panel's benefit
-
-### Requirement: Watch paths are selected by browsing, and browsing only reads
-An **Add path** control SHALL open a directory picker that opens at the user's
-home directory and allows navigating into subdirectories and up to parent
-directories, so a location outside `$HOME` remains reachable. The picker MUST
-list directories only, MUST NOT read file contents, and MUST NOT accept a typed
-path. Selecting a directory commits it as a watch path.
-
-#### Scenario: Choosing a vault
-- **WHEN** the user opens the picker and navigates to a directory
-- **THEN** only directories are listed at each level, and confirming the selection adds it as a watch path
-
-#### Scenario: A location outside the home directory
-- **WHEN** the user's writing lives under a mount point outside `$HOME`
-- **THEN** the picker can reach it by navigating upward, without any path being typed
-
-#### Scenario: Browsing writes nothing
-- **WHEN** the user opens, navigates and closes the picker without confirming
-- **THEN** nothing is written and no subprocess is spawned
-
-### Requirement: A whitelist candidate is offered, never guessed
-The panel SHALL offer the most recently focused application that is not already
-whitelisted, identified by the exact id the engine matched against. Adding it
-MUST be a single action.
-
-#### Scenario: Adding the editor you were just in
-- **WHEN** the user has focused an editor that is not whitelisted, then opens the panel
-- **THEN** the panel names that application by its exact id and adding it takes one action
-
-#### Scenario: Nothing to suggest
-- **WHEN** every recently focused application is already whitelisted
-- **THEN** the panel offers no candidate rather than an empty or placeholder control
-
-### Requirement: Anything that can be added can be removed
-Every watch path and every whitelisted application SHALL be listed individually
-with a control that removes it.
-
-#### Scenario: Undoing a mistake
-- **WHEN** the user has whitelisted an application in error
-- **THEN** the panel lists it and removes it in one action, without the user recalling its id
+## MODIFIED Requirements
 
 ### Requirement: The panel displays the engine's configuration, not its own
 Displayed settings SHALL be read back from the engine's own files. The panel
@@ -76,6 +18,8 @@ control cannot become a place where a value lives that the engine never took.
 #### Scenario: A refused value left in an edited control
 - **WHEN** the user types a value the engine refuses, and the engine reports the failure
 - **THEN** the control returns to showing the configured value rather than continuing to display the refused one
+
+## ADDED Requirements
 
 ### Requirement: Arguments are constrained before they are sent
 Each argument the panel sends SHALL be constrained at its source. A path MUST
@@ -135,3 +79,27 @@ is the value the stepper settles on.
 - **WHEN** the user holds a stepper so that it repeats across many values
 - **THEN** the engine is not invoked once per repeat, and the value that is stored is the one the control settles on
 
+## REMOVED Requirements
+
+### Requirement: Every committed value is chosen from a presented set
+**Reason**: The rule forbade text input outright, and its second scenario
+asserted that the key catcher needs no blocking because nothing needs
+keystrokes. Both stop being true when the goal becomes typable. The rule was
+also stricter than the problem it protected against: the hazard was the panel
+inventing or validating configuration semantics, not the keyboard. Its intent
+survives in "Arguments are constrained before they are sent", which keeps every
+non-numeric argument set-derived, and the key-catcher concern is promoted from a
+scenario to its own requirement because it is now load-bearing rather than
+vacuous.
+**Migration**: Paths, application ids and mascot names are unaffected and are
+still chosen, never typed. The goal is typed into a field bounded by the
+engine's own rule. Any panel adding a control that takes keystrokes must satisfy
+"A control that receives keystrokes blocks the panel's key catcher".
+
+### Requirement: A continuous control commits once, on release
+**Reason**: Written around the goal slider, which is being removed. The slider
+stepped by 50 and stopped at 3000, so it could neither represent nor preserve a
+goal the engine accepts, and touching it silently rewrote one.
+**Migration**: Replaced by "A value control commits once, when the interaction
+ends", which keeps the commit-once rule and states what ends an interaction for
+each kind of control rather than assuming a drag.
