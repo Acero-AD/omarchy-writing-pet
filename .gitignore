@@ -1,5 +1,9 @@
 node_modules/
 *.log
 
+# Generated Python bytecode
+__pycache__/
+*.py[cod]
+
 # Local, machine-specific Claude Code settings
 .claude/settings.local.json
