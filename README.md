@@ -56,8 +56,8 @@ progress, and a streak of the last seven days.
 > behaviour and remains accurate as a design document.
 
 > **Status:** implemented, not yet verified against a live Omarchy session.
-> Passes `omarchy plugin validate`, `qmllint`, 38 unit tests and the security
-> guard. Runtime behaviour in a real bar has not been exercised yet — see
+> Passes `omarchy plugin validate`, `qmllint`, 115 Python tests, 41 JavaScript
+> tests, and the security guard. Runtime behaviour in a real bar has not been exercised yet — see
 > [Verification status](#verification-status).
 
 ## It does not read your keyboard
@@ -124,14 +124,15 @@ is not it.
 
 | Control | What it does |
 |---|---|
-| **Goal** | A slider, 100–3000 in steps of 50. Commits when you let go. |
+| **Goal** | A positive integer field. Type an exact value or use the arrows in steps of 10; rapid edits commit once after they settle. |
 | **Watch paths** | Each folder listed with a remove button, plus **Add path**, which opens a directory browser starting at your home folder. You can navigate above it, so a vault under `/mnt` is reachable. |
 | **Writing apps** | Each app listed with a remove button. |
 | **Mascot** | `bird` or `snail`. |
 
-Nothing in the panel is typed. That is deliberate: the identifier your
-compositor reports for an application is usually not its name — Obsidian is
-`md.obsidian.Obsidian` — so guessing it is hopeless and typing it is
+Only the numeric goal is typed, and the field constrains it to the positive
+integer range the engine accepts. Other values are selected. The identifier
+your compositor reports for an application is usually not its name — Obsidian
+is `md.obsidian.Obsidian` — so guessing it is hopeless and typing it is
 error-prone. Instead the engine publishes the last application it saw and did
 **not** count, and the panel offers it as a single button. Focus your editor,
 open the panel, click once.
@@ -241,7 +242,7 @@ language without touching this plugin.
 ## Development
 
 ```bash
-node --test tests/*.test.mjs    # 38 unit tests, no dependencies
+node --test tests/*.test.mjs    # 41 tests, no dependencies
 ./scripts/security-guard.sh     # privacy constraints + command allowlist
 omarchy plugin validate .
 qmllint -I "$OMARCHY_PATH/shell" *.qml
@@ -275,7 +276,7 @@ restarts it on its own.
 
 | | |
 |---|---|
-| Unit tests, security guard, lifecycle lint, manifest | ✅ 71 Python, 25 JS, all passing |
+| Unit tests, security guard, lifecycle lint, manifest | ✅ 115 Python, 41 JS, all passing |
 | Counting real writing | ✅ verified in Typora and an Obsidian vault |
 | Rollover, restart, restored baselines | ✅ covered by tests and a live restart |
 | Live bar rendering | ✅ the critter renders from the state file |

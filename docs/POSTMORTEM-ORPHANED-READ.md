@@ -159,3 +159,18 @@ completely different direction. It lives in the singleton instead.
 The lesson is not that the emergency rules were wrong to write. It is that a
 rule written to stop bleeding should say so, so that whoever revisits it knows
 whether they are relaxing a safeguard or removing a splint.
+
+## Admitting one numeric field, 2026-09-07
+
+The settings panel now uses a `NumberField` for the daily goal. This reverses
+the temporary no-text-input rule recorded after the crash, but it does not
+restore the crash's shape: none of the four necessary conditions was a text
+field, the field still invokes the external engine rather than writing from
+QML, and every process and file read remains owned by a singleton.
+
+It does reintroduce one separate hazard. `PanelKeyCatcher` handles keys with
+`Keys.BeforeItem`, so an unblocked catcher consumes input before a focused field
+can receive it. The field and catcher are therefore a required pair:
+`blocked` is bound to the field's `activeFocus`, Escape first releases that
+focus, and the lifecycle linter rejects any focusable input without such a
+binding. A second Escape reaches the catcher and closes the panel normally.
