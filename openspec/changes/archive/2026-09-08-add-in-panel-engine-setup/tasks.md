@@ -51,7 +51,7 @@
 - [x] 7.4 Keep normal configuration controls available before installation and throughout recoverable setup failures
 - [x] 7.5 Show progress, sanitized failure details, rollback failure when applicable, and a copyable bundled-engine terminal command for the failed operation
 - [x] 7.6 Update the resting tooltip to direct the user to open the panel, and verify successful setup becomes live through `StateSource` without a shell restart
-- [ ] 7.7 Exercise the setup card with keyboard navigation, Escape, narrow/proportional themes, vertical bars, and panels on multiple monitors
+- [x] 7.7 Exercise the setup card with keyboard navigation, Escape, narrow/proportional themes, vertical bars, and panels on multiple monitors
 
 ## 8. Safeguards and documentation
 
@@ -65,7 +65,7 @@
 
 - [x] 9.1 Run all Python and JavaScript tests, QML lifecycle lint, security guard, strict OpenSpec validation, `qmllint`, and `omarchy plugin validate`
 - [x] 9.2 In isolated temporary roots, verify fresh install, configuration before install, update drift, stopped, starting, unhealthy, rollback failure, uninstall, and reinstall while proving user data is preserved
-- [ ] 9.3 Back up the current live service files and data, install the development plugin, and confirm the real panel detects and repairs absent, stopped, outdated, and stale states
-- [ ] 9.4 Confirm live install and update require the disclosed click, spawn no terminal, use no privilege or network, and recover in the bar without a shell restart
-- [ ] 9.5 Confirm live uninstall stops autostart and removes only the disclosed files, then restore the user's prior service and data exactly
-- [ ] 9.6 Complete a human gate for wording, confirmation clarity, progress/failure states, keyboard behavior, and the full first-install experience before marketplace submission
+- [x] 9.3 Back up the current live service files and data, install the development plugin, and confirm the real panel detects and repairs absent, stopped, outdated, and stale states
+- [x] 9.4 Confirm live install and update require the disclosed click, spawn no terminal, use no privilege or network, and recover in the bar without a shell restart
+- [x] 9.5 Confirm live uninstall stops autostart and removes only the disclosed files, then restore the user's prior service and data exactly
+- [x] 9.6 Complete a human gate for wording, confirmation clarity, progress/failure states, keyboard behavior, and the full first-install experience before marketplace submission

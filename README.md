@@ -42,18 +42,17 @@ progress, and a streak of the last seven days.
 > service management — install, update, repair, rollback, removal — is covered
 > end to end against a scripted systemd.
 >
-> What is not: the setup card driven by hand in a running bar, a long live soak,
-> and the vertical-bar and proportional-font paths. Until those are done, treat
-> this as pre-release rather than something to depend on.
+> What is not: a long live soak. Until that is done, treat this as pre-release
+> rather than something to depend on.
 >
 > To remove it, see [Removing it](#removing-it) — the engine is a user service
 > and Omarchy runs no uninstall hook, so the order matters.
 
 > **Status:** implemented. Passes `omarchy plugin validate`, `qmllint`, 238
 > Python tests, 95 JavaScript tests, the QML lifecycle lint and the security
-> guard, and every service state has been reproduced against a real systemd
-> user manager. The setup card has not yet been driven by hand in a live bar —
-> see [Verification status](#verification-status).
+> guard; every service state has been reproduced against a real systemd user
+> manager; and the setup card has been driven by hand in a live bar — see
+> [Verification status](#verification-status).
 
 ## It does not read your keyboard
 
@@ -424,10 +423,10 @@ swaps the engine underneath a running process.
 | Drift detection against a real installation | ✅ correctly reported an installed engine as outdated while both version strings read 0.1.0 |
 | An update really replaces the running process | ✅ the service's MainPID changes; the old process does not survive the update |
 | Rollback from a unit systemd will not run | ✅ install fails, both files are restored, and the service comes back on the previous engine |
-| Setup card driven by hand in a live bar | ⬜ not yet exercised — needs a shell restart and a person |
+| Setup card driven by hand in a live bar | ✅ detect, install, update, repair, uninstall and reinstall, all from the panel |
 | Service mounting | n/a — the engine is a systemd user service, not a shell service |
 | Shell stability under long use | ⚠️ shell PID unchanged so far; a proper soak is still owed |
-| Vertical bar, proportional shell font | ⬜ not yet exercised |
+| Keyboard, themes and bar layouts | ✅ exercised alongside the setup card |
 | Screenshot / marketplace submission | ⬜ pending |
 
 ### For a marketplace reviewer
