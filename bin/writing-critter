@@ -979,6 +979,24 @@ STARTUP_GRACE_SECONDS = 20
 SERVICE_OUTPUT_MAX = 8192
 SERVICE_MESSAGE_MAX = 400
 
+# How long to keep watching after a start or a restart before believing it.
+#
+# `systemctl restart` returns 0 for a Type=simple unit the moment the fork
+# succeeds. If ExecStart cannot be executed at all, systemd finds out shortly
+# afterwards -- so a single immediate re-read of ActiveState reports "active"
+# for a unit that is already on its way into a crash loop, and an install that
+# checked once called that a success.
+#
+# The numbers are measured, not guessed. On systemd 261, restarting a unit
+# whose ExecStart does not exist: the command returned after 5-6ms, and the
+# failure became visible at 34ms, 34ms and 59ms across three trials. The unit
+# then sits in auto-restart for RestartSec (5s here) before trying again, so
+# anything that looks after ~60ms and before ~5s sees it. This window clears
+# the worst measured latency by about seven times and still costs under half a
+# second on the path where everything is fine.
+VERIFY_ATTEMPTS = 3
+VERIFY_DELAY = 0.2
+
 ENGINE_MODE = 0o755
 UNIT_MODE = 0o644
 
@@ -1055,6 +1073,7 @@ class Systemctl:
         "UnitFileState",
         "ActiveEnterTimestampMonotonic",
         "Result",
+        "NRestarts",
     )
 
     def _call(self, args: list[str]) -> tuple[bool, str, str]:
@@ -1227,7 +1246,14 @@ def service_status(paths: ServicePaths | None = None,
         # inventing a supervision state.
         state = "ready" if fresh else "stopped"
     elif active == "activating":
-        state = "starting"
+        # "activating" covers two opposite situations. A unit that is coming up
+        # is starting. A unit in auto-restart has already failed and is waiting
+        # out RestartSec before failing again -- and because this unit sets
+        # Restart=on-failure, a crash loop never reaches "failed" at all, it
+        # oscillates through activating forever. Reporting that as "starting"
+        # would leave the panel saying "nearly there" for as long as the engine
+        # kept dying, which is the one thing this display must never do.
+        state = "unhealthy" if props.get("SubState") == "auto-restart" else "starting"
     elif active == "failed":
         # Stopped, and stopped for a reason. Restart is the repair that works
         # on a unit which hit its start limit, so this is not folded into
@@ -1242,7 +1268,12 @@ def service_status(paths: ServicePaths | None = None,
         state = "starting" if started is not None and started < STARTUP_GRACE_SECONDS else "unhealthy"
 
     detail = message
-    if not detail and state == "unhealthy" and active == "failed":
+    if not detail and state == "unhealthy" and props.get("SubState") == "auto-restart":
+        restarts = props.get("NRestarts", "")
+        detail = ("the service keeps failing and restarting"
+                  + (f" ({restarts} times so far)"
+                     if restarts.isdigit() and int(restarts) > 0 else ""))
+    elif not detail and state == "unhealthy" and active == "failed":
         detail = f"the service failed ({props.get('Result', 'unknown')})"
     elif not detail and state == "unhealthy":
         detail = "the service is running but has not published state"
@@ -1269,6 +1300,48 @@ def service_status(paths: ServicePaths | None = None,
         "enginePath": str(paths.engine),
         "unitPath": str(paths.unit),
     }
+
+
+def _verify_running(systemctl: Systemctl, attempts: int | None = None,
+                    delay: float | None = None) -> tuple[bool, str]:
+    """Did the thing we just started actually stay started?
+
+    Not "did systemctl exit 0" -- it does that for a program that cannot be
+    executed at all -- and not "is ActiveState active right now", because right
+    now is too soon. This keeps looking until systemd has had a chance to
+    contradict itself, returns as soon as it does, and only calls a start
+    successful once the unit has survived the whole window.
+    """
+    # Read at call time, not bound as defaults: a default argument is
+    # evaluated once when this file is imported, so a test that shortened the
+    # window by setting the module constant changed nothing and quietly slept
+    # through the whole suite instead.
+    attempts = VERIFY_ATTEMPTS if attempts is None else attempts
+    delay = VERIFY_DELAY if delay is None else delay
+
+    last_active = "unknown"
+    for attempt in range(attempts):
+        ok, out, message = systemctl.show()
+        if not ok:
+            return False, message
+        props = parse_show(out)
+        last_active = props.get("ActiveState", "unknown")
+        sub = props.get("SubState", "")
+        if sub == "auto-restart":
+            # NRestarts is usually still 0 here: the unit has failed once and
+            # is waiting out RestartSec before its first retry. Only mention a
+            # count when there is one, rather than saying "restarting 0 times".
+            restarts = props.get("NRestarts", "")
+            repeated = restarts.isdigit() and int(restarts) > 0
+            return False, ("the service started and immediately failed"
+                           + (f", and has failed {restarts} times since" if repeated else ""))
+        if last_active == "failed":
+            return False, f"the service failed ({props.get('Result', 'unknown')})"
+        if last_active not in ("active", "activating"):
+            return False, f"the service is {last_active}"
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    return True, ""
 
 
 def _result(action: str, ok: bool, status: dict[str, Any], message: str = "",
@@ -1426,15 +1499,16 @@ def service_install(paths: ServicePaths | None = None,
                        rolled_back=rolled, rollback_failed=not rolled or bool(why))
 
     # Verify against systemd's own answer, not against the exit code of the
-    # restart: a Type=simple unit whose program dies immediately reports a
-    # successful start. Measured; see tests/fixtures_systemctl.py.
-    status = service_status(paths, systemctl)
-    if status["activeState"] not in ("active", "activating"):
+    # restart: a Type=simple unit whose program cannot be executed reports a
+    # successful start, and reports itself active for a moment afterwards.
+    # Measured; see tests/fixtures_systemctl.py and _verify_running.
+    running, why_not = _verify_running(systemctl)
+    if not running:
         rolled, why = _rollback(snapshots, systemctl, was_active, had_unit)
         after = service_status(paths, systemctl)
-        return _result("install", False, after,
-                       message=f"the service did not start ({status['activeState']})",
+        return _result("install", False, after, message=why_not,
                        rolled_back=rolled, rollback_failed=not rolled or bool(why))
+    status = service_status(paths, systemctl)
 
     return _result("install", True, status, changed=changed,
                    message="" if changed else "already up to date")
@@ -1452,10 +1526,10 @@ def _lifecycle(action: str, paths: ServicePaths, systemctl: Systemctl,
     if not ok:
         return _result(action, False, service_status(paths, systemctl), message=message)
 
+    running, why_not = _verify_running(systemctl)
     after = service_status(paths, systemctl)
-    if after["activeState"] not in ("active", "activating"):
-        return _result(action, False, after,
-                       message=f"the service did not start ({after['activeState']})")
+    if not running:
+        return _result(action, False, after, message=why_not)
     return _result(action, True, after, changed=True)
 
 

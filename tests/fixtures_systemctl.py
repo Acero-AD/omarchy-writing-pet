@@ -26,6 +26,15 @@ The fields below are exactly the ones the parser asks for. Note in particular:
   * `systemctl --user start` on a Type=simple unit whose ExecStart exits 1
     returns 0. The fork succeeded; the program failed. Verifying a lifecycle
     action therefore means re-reading ActiveState, not trusting the exit code.
+  * Re-reading it ONCE is still not enough, which cost a bug. With an ExecStart
+    pointing at a path that does not exist, `restart` exited 0 and the very
+    next `show` reported ActiveState=active, SubState=running, Result=success.
+    Only milliseconds later did it become activating/auto-restart. An install
+    that verified immediately therefore reported success and left a unit
+    installed that could never run. See SHOW_ACTIVE_BUT_DOOMED below.
+  * This unit sets Restart=on-failure, so a crash loop never settles on
+    "failed": it oscillates through activating/auto-restart indefinitely. A
+    parser that reads "activating" as "starting" will say "starting" forever.
 """
 
 # ------------------------------------------------- `systemctl --user show`
@@ -95,6 +104,30 @@ Result=exit-code
 # The monotonic clock reading taken alongside SHOW_ACTIVE and SHOW_FAILED, so a
 # test can position either fixture at a known age.
 CAPTURED_MONOTONIC_SECONDS = 22689.729499824
+
+# The first `show` after restarting a unit whose ExecStart does not exist.
+# Indistinguishable from a healthy start; that is the entire problem.
+SHOW_ACTIVE_BUT_DOOMED = """\
+LoadState=loaded
+ActiveState=active
+SubState=running
+UnitFileState=enabled
+ActiveEnterTimestampMonotonic=1725658477
+Result=success
+NRestarts=0
+"""
+
+# The same unit a moment later, and for as long as it keeps failing. Captured
+# across three reads two seconds apart: NRestarts climbed 9, 10, 10.
+SHOW_CRASH_LOOPING = """\
+LoadState=loaded
+ActiveState=activating
+SubState=auto-restart
+UnitFileState=enabled
+ActiveEnterTimestampMonotonic=1720408700
+Result=exit-code
+NRestarts=9
+"""
 
 # ------------------------------------------------------- degenerate output
 #

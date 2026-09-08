@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,10 +52,19 @@ class FakeSystemctl(engine.Systemctl):
         self.calls: list[list[str]] = []
         # verb -> message. A verb listed here fails every time it is called.
         self.fail: dict[str, str] = {}
-        # What ExecStart does. "run" stays active; "die" fails immediately, the
-        # way a Type=simple unit does when its program exits non-zero.
+        # What ExecStart does.
+        #   "run"    stays active
+        #   "die"    fails immediately
+        #   "doomed" reports active on the first look and crash-looping after,
+        #            which is what a real Type=simple unit does when its
+        #            ExecStart cannot be executed at all. Measured; see
+        #            tests/fixtures_systemctl.py.
         self.exec_result = "run"
         self.unavailable = ""
+        self.sub_state = ""
+        self.restarts = 0
+        # How many `show` calls the doomed unit still looks healthy for.
+        self.doomed_grace = 1
 
     @property
     def verbs(self) -> list[str]:
@@ -70,13 +80,23 @@ class FakeSystemctl(engine.Systemctl):
 
         if verb == "show":
             loaded = self.unit_path.exists()
+            active = self.active if loaded else "inactive"
+            sub = self.sub_state or ("running" if active == "active" else "dead")
+            if self.exec_result == "doomed" and loaded:
+                if self.doomed_grace > 0:
+                    self.doomed_grace -= 1  # still looks fine, briefly
+                else:
+                    active, sub = "activating", "auto-restart"
+                    self.restarts += 1
+            failed = sub == "auto-restart" or active == "failed"
             body = (
                 f"LoadState={'loaded' if loaded else 'not-found'}\n"
-                f"ActiveState={self.active if loaded else 'inactive'}\n"
-                f"SubState={'running' if self.active == 'active' else 'dead'}\n"
+                f"ActiveState={active}\n"
+                f"SubState={sub}\n"
                 f"UnitFileState={'enabled' if (loaded and self.enabled) else ('disabled' if loaded else '')}\n"
                 f"ActiveEnterTimestampMonotonic={self.enter_monotonic}\n"
-                "Result=success\n"
+                f"Result={'exit-code' if failed else 'success'}\n"
+                f"NRestarts={self.restarts}\n"
             )
             return True, body, ""
         if verb in ("start", "restart"):
@@ -108,6 +128,14 @@ class ServiceCase(unittest.TestCase):
     """A whole XDG world in a temporary directory, including a plugin checkout."""
 
     def setUp(self):
+        # The lifecycle verification deliberately watches for a fraction of a
+        # second before believing systemd. The fake answers instantly, so the
+        # wait buys nothing here and costs it on every test; the length of the
+        # real window is a measured constant, asserted in TestAUnitThatCannotRun
+        # rather than slept through a hundred times.
+        patch = unittest.mock.patch.object(engine, "VERIFY_DELAY", 0)
+        patch.start()
+        self.addCleanup(patch.stop)
         self.dir = tempfile.TemporaryDirectory()
         self.home = Path(self.dir.name)
 
@@ -540,7 +568,7 @@ class TestInstallRollback(ServiceCase):
         self.sc.exec_result = "die"
         result = engine.service_install(self.paths, self.sc)
         self.assertFalse(result["ok"], "an exit code from restart is not verification")
-        self.assertIn("did not start", result["message"])
+        self.assertIn("failed", result["message"])
         self.assertTrue(result["rolledBack"])
         self.assertFalse(self.engine_dest.exists())
 
@@ -676,6 +704,98 @@ class TestNothingButSystemctlIsEverRun(ServiceCase):
 # ------------------------------------------------- start, restart, uninstall
 
 
+class TestAUnitThatCannotRun(ServiceCase):
+    """The bug live verification found, in both the places it showed up.
+
+    An ExecStart pointing at a path that does not exist makes `systemctl
+    restart` exit 0 and the next `show` report active/running/success. The
+    install verified against that one look, called it a success, and left a
+    unit installed that could never run. Because this unit sets
+    Restart=on-failure, the crash loop that followed never reached "failed" --
+    it sat in activating/auto-restart, which status called "starting".
+    """
+
+    def test_a_crash_loop_is_unhealthy_not_starting(self):
+        self.install_files()
+        self.sc.active, self.sc.sub_state = "activating", "auto-restart"
+        self.sc.restarts = 9
+        st = self.status()
+        self.assertEqual(st["state"], "unhealthy",
+                         "a unit that keeps dying is not a unit that is starting")
+        self.assertIn("keeps failing", st["message"])
+        self.assertIn("9", st["message"])
+
+    def test_a_genuine_startup_is_still_starting(self):
+        self.install_files()
+        self.sc.active, self.sc.sub_state = "activating", "start-pre"
+        self.assertEqual(self.status()["state"], "starting")
+
+    def test_install_does_not_believe_the_first_healthy_looking_answer(self):
+        self.sc.exec_result = "doomed"
+        result = engine.service_install(self.paths, self.sc)
+        self.assertFalse(result["ok"], "an install verified against one look at systemd")
+        self.assertIn("immediately failed", result["message"])
+        self.assertTrue(result["rolledBack"])
+        self.assertFalse(self.engine_dest.exists(), "a unit that cannot run was left installed")
+
+    def test_a_first_failure_is_not_described_as_zero_restarts(self):
+        """NRestarts is 0 until RestartSec elapses; the sentence must still read."""
+        self.install_files()
+        self.sc.active, self.sc.sub_state, self.sc.restarts = "activating", "auto-restart", 0
+        self.assertNotIn("0", self.status()["message"])
+        self.sc.restarts = 7
+        self.assertIn("7 times", self.status()["message"])
+
+    def test_start_does_not_believe_it_either(self):
+        self.install_files()
+        self.sc.exec_result = "doomed"
+        result = engine.service_start(self.paths, self.sc)
+        self.assertFalse(result["ok"])
+        self.assertIn("immediately failed", result["message"])
+
+    def test_restart_does_not_believe_it_either(self):
+        self.install_files()
+        self.sc.exec_result = "doomed"
+        result = engine.service_restart(self.paths, self.sc)
+        self.assertFalse(result["ok"])
+
+    def test_a_healthy_start_still_survives_the_whole_window(self):
+        result = engine.service_install(self.paths, self.sc)
+        self.assertTrue(result["ok"], result["message"])
+        self.assertGreaterEqual(self.sc.verbs.count("show"), engine.VERIFY_ATTEMPTS,
+                                "the window was not actually watched")
+
+    def test_verification_gives_up_and_reports_a_broken_systemd(self):
+        self.install_files()
+        self.sc.unavailable = "Failed to connect to bus"
+        running, why = engine._verify_running(self.sc)
+        self.assertFalse(running)
+        self.assertIn("bus", why)
+
+
+class TestTheWatchWindow(unittest.TestCase):
+    """Asserted against the real constants, so nothing here may patch them."""
+
+    def test_the_window_clears_the_measured_failure_latency(self):
+        """34-59ms observed on systemd 261; see tests/fixtures_systemctl.py."""
+        window = engine.VERIFY_ATTEMPTS * engine.VERIFY_DELAY
+        self.assertGreater(window, 0.06 * 3, "too tight to catch the failure")
+        self.assertLess(window, 5.0,
+                        "outlasts RestartSec, and the button feels dead that long")
+
+    def test_the_window_is_actually_used(self):
+        """A default argument would have frozen this at import time."""
+        calls = []
+
+        class Counting(engine.Systemctl):
+            def _call(self, args):
+                calls.append(args[0])
+                return True, "ActiveState=active\nSubState=running\n", ""
+
+        engine._verify_running(Counting(), attempts=2, delay=0)
+        self.assertEqual(calls.count("show"), 2)
+
+
 class TestStartAndRestart(ServiceCase):
     def test_start_a_stopped_service(self):
         self.install_files()
@@ -711,7 +831,7 @@ class TestStartAndRestart(ServiceCase):
         self.sc.exec_result = "die"
         result = engine.service_start(self.paths, self.sc)
         self.assertFalse(result["ok"])
-        self.assertIn("did not start", result["message"])
+        self.assertIn("failed", result["message"])
 
     def test_a_refused_start_reports_what_systemd_said(self):
         self.install_files()
