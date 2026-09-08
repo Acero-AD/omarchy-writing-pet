@@ -596,3 +596,234 @@ test("serviceProgress: every action says what it is doing", () => {
     assert.ok(M.serviceProgress(action).length > 0, action);
   assert.equal(M.serviceProgress("nonsense"), "");
 });
+
+// ------------------------------------------------------- THE COMMAND QUEUE
+//
+// Control.qml cannot be tested as Control.qml: Quickshell ships only
+// .qmltypes and links its plugin into the quickshell binary, so nothing that
+// imports Quickshell can be instantiated by qmltestrunner. These are the
+// decisions that were moved out of it for exactly that reason — which argv an
+// action maps to, how many processes a multi-monitor bar spawns, and whether
+// two of them can overlap.
+
+test("serviceArgv: each action maps to one fixed argument list", () => {
+  for (const action of M.SERVICE_ACTIONS)
+    assert.deepEqual(M.serviceArgv(action), ["service", action, "--json"]);
+});
+
+test("serviceArgv: anything not in the vocabulary gets null, not a command", () => {
+  const attempts = [
+    "purge", "", null, undefined, 0, [], {}, "status; rm -rf /",
+    "status --root=/", "../../bin/sh", "INSTALL", " install", "install "
+  ];
+  for (const attempt of attempts)
+    assert.equal(M.serviceArgv(attempt), null, `${JSON.stringify(attempt)} produced a command`);
+});
+
+test("serviceArgv: the caller supplies a name and never an argument", () => {
+  // Whatever a caller passes, the only variable part of the result is the
+  // action itself, and it has already been checked against the vocabulary.
+  for (const action of M.SERVICE_ACTIONS) {
+    const argv = M.serviceArgv(action);
+    assert.equal(argv.length, 3);
+    assert.equal(argv[0], "service");
+    assert.equal(argv[2], "--json");
+    assert.ok(!argv.some(a => a.includes("/")), "a path reached an argument list");
+  }
+});
+
+test("configArgv: the config vocabulary is closed too, and values are stringified", () => {
+  assert.deepEqual(M.configArgv("set-goal", 800), ["config", "set-goal", "800"]);
+  assert.deepEqual(M.configArgv("add-path", "/home/u/notes"),
+                   ["config", "add-path", "/home/u/notes"]);
+  for (const bad of ["service", "install", "purge", "", null])
+    assert.equal(M.configArgv(bad, "x"), null, `${bad} produced a command`);
+});
+
+test("the two vocabularies do not overlap", () => {
+  for (const action of M.SERVICE_ACTIONS)
+    assert.equal(M.CONFIG_ACTIONS.includes(action), false, action);
+  for (const action of M.CONFIG_ACTIONS)
+    assert.equal(M.SERVICE_ACTIONS.includes(action), false, action);
+});
+
+// ------------------------------------------------------------ serialisation
+
+const entry = (kind, action) => M.queueEntry(kind, action, M.serviceArgv(action) || []);
+
+test("queueNext: nothing starts while something is in flight", () => {
+  const pending = [entry("service", "install"), entry("service", "status")];
+  assert.equal(M.queueNext(pending, true), null, "a second process was started");
+  assert.deepEqual(M.queueNext(pending, false), pending[0]);
+});
+
+test("queueNext: an empty queue starts nothing", () => {
+  assert.equal(M.queueNext([], false), null);
+  assert.equal(M.queueNext(null, false), null);
+  assert.equal(M.queueNext(undefined, false), null);
+});
+
+test("queueNext: a config action and a service action cannot overlap", () => {
+  // The single queue is the whole mechanism: a service action queued behind a
+  // config mutation waits for it, and vice versa.
+  let pending = [];
+  pending = M.queueAppend(pending, M.queueEntry("config", "set-goal", M.configArgv("set-goal", 900)));
+  pending = M.queueAppend(pending, entry("service", "install"));
+  const first = M.queueNext(pending, false);
+  assert.equal(first.kind, "config");
+  assert.equal(M.queueNext(pending, true), null, "the service action started anyway");
+});
+
+test("queueAppend: does not mutate the array it was given", () => {
+  const before = [entry("service", "status")];
+  const after = M.queueAppend(before, entry("service", "install"));
+  assert.equal(before.length, 1, "the queue was mutated in place");
+  assert.equal(after.length, 2);
+});
+
+// ---------------------------------------------------------------- coalescing
+
+test("queueHolds: a probe already in flight is not queued again", () => {
+  const current = entry("service", "status");
+  assert.equal(M.queueHolds([], current, true, "service", "status"), true);
+});
+
+test("queueHolds: a probe already waiting is not queued again", () => {
+  const pending = [entry("service", "install"), entry("service", "status")];
+  assert.equal(M.queueHolds(pending, null, false, "service", "status"), true);
+});
+
+test("queueHolds: an idle queue holds nothing", () => {
+  assert.equal(M.queueHolds([], null, false, "service", "status"), false);
+  assert.equal(M.queueHolds(null, null, false, "service", "status"), false);
+});
+
+test("queueHolds: a finished probe still in `current` does not block the next one", () => {
+  // current survives the process it described; only inflight says it is live.
+  const current = entry("service", "status");
+  assert.equal(M.queueHolds([], current, false, "service", "status"), false);
+});
+
+test("queueHolds: three monitors opening a panel produce one probe", () => {
+  // What Control.refreshServiceStatus does, three times in a row.
+  let pending = [];
+  let spawned = 0;
+  for (let screen = 0; screen < 3; screen++) {
+    if (!M.queueHolds(pending, null, false, "service", "status")) {
+      pending = M.queueAppend(pending, entry("service", "status"));
+      spawned++;
+    }
+  }
+  assert.equal(spawned, 1, "one glance at the bar spawned a process per screen");
+  assert.equal(pending.length, 1);
+});
+
+test("queueHolds: coalescing is per action, not a blanket suppression", () => {
+  const pending = [entry("service", "status")];
+  assert.equal(M.queueHolds(pending, null, false, "service", "install"), false,
+    "a queued probe suppressed a real action");
+});
+
+// ------------------------------------------------------------------ timeouts
+
+test("watchdogFor: a service action gets the longer budget", () => {
+  assert.equal(M.watchdogFor("service"), M.WATCHDOG_SERVICE_MS);
+  assert.equal(M.watchdogFor("config"), M.WATCHDOG_CONFIG_MS);
+  assert.equal(M.watchdogFor(""), M.WATCHDOG_CONFIG_MS);
+  assert.equal(M.watchdogFor(undefined), M.WATCHDOG_CONFIG_MS);
+});
+
+test("watchdogFor: the service budget outlasts the engine's own systemd timeouts", () => {
+  // The engine allows 8s per systemctl call and an install makes three, plus
+  // the verification window. A watchdog inside that would report a timeout for
+  // an install that then succeeded.
+  assert.ok(M.WATCHDOG_SERVICE_MS > 8000 * 3 + 2000,
+    "the watchdog can fire on a slow but working install");
+  assert.ok(M.WATCHDOG_SERVICE_MS > M.WATCHDOG_CONFIG_MS);
+});
+
+// ----------------------------------------------------------------- settling
+
+const settleStatus = (over = {}) => JSON.stringify(Object.assign({
+  schema: 1, action: "install", ok: true, changed: true,
+  rolledBack: false, rollbackFailed: false, message: "",
+  state: "ready", installed: true, current: true, enabled: true,
+  activeState: "active", stateFresh: true, sourceAvailable: true,
+  sourceVersion: "0.1.0", installedVersion: "0.1.0",
+  enginePath: "/home/u/.local/bin/writing-critter",
+  unitPath: "/home/u/.config/systemd/user/writing-critter.service"
+}, over));
+
+test("serviceSettlement: a clean success clears the previous failure", () => {
+  const out = M.serviceSettlement("install", "", settleStatus(), null);
+  assert.equal(out.failed, false);
+  assert.equal(out.failedAction, "");
+  assert.equal(out.failureReason, "");
+  assert.equal(out.status.state, "ready");
+});
+
+test("serviceSettlement: the engine's own message beats the exit code", () => {
+  const raw = settleStatus({ ok: false, message: "systemctl enable: refused" });
+  const out = M.serviceSettlement("install", "exited 1", raw, null);
+  assert.equal(out.failed, true);
+  assert.equal(out.failedAction, "install");
+  assert.equal(out.failureReason, "systemctl enable: refused",
+    "the panel showed 'exited 1' instead of the step that refused");
+});
+
+test("serviceSettlement: without a message it falls back to the process boundary", () => {
+  const out = M.serviceSettlement("start", "timed out", "", null);
+  assert.equal(out.failed, true);
+  assert.equal(out.failureReason, "timed out");
+});
+
+test("serviceSettlement: a result object is read even when the process failed", () => {
+  // A failed install still reports the state it left behind, and that is the
+  // state the panel has to show.
+  const raw = settleStatus({ ok: false, state: "not-installed", installed: false,
+                             rolledBack: true, message: "the service did not start" });
+  const out = M.serviceSettlement("install", "exited 1", raw, null);
+  assert.equal(out.status.state, "not-installed");
+  assert.equal(out.rolledBack, true);
+  assert.equal(out.rollbackFailed, false);
+});
+
+test("serviceSettlement: rollback failure is carried separately", () => {
+  const raw = settleStatus({ ok: false, rolledBack: true, rollbackFailed: true });
+  const out = M.serviceSettlement("install", "exited 1", raw, null);
+  assert.equal(out.rolledBack, true);
+  assert.equal(out.rollbackFailed, true);
+});
+
+test("serviceSettlement: unreadable output from a failed process keeps the last known state", () => {
+  const previous = M.parseServiceStatus(settleStatus({ state: "ready" }));
+  const out = M.serviceSettlement("restart", "timed out", "garbage", previous);
+  assert.equal(out.status.state, "ready", "a timeout blanked a state we already knew");
+  assert.equal(out.failed, true);
+});
+
+test("serviceSettlement: unreadable output from a clean exit is still unknown", () => {
+  // Exit 0 and nonsense on stdout is not a success to be optimistic about.
+  const previous = M.parseServiceStatus(settleStatus({ state: "ready" }));
+  const out = M.serviceSettlement("status", "", "garbage", previous);
+  assert.equal(out.status.state, M.SERVICE_UNKNOWN);
+});
+
+test("serviceSettlement: ok:false in the payload fails even on a clean exit", () => {
+  const out = M.serviceSettlement("install", "", settleStatus({ ok: false }), null);
+  assert.equal(out.failed, true);
+});
+
+test("serviceSettlement: only a starting service asks to be looked at again", () => {
+  for (const state of M.SERVICE_STATES) {
+    const out = M.serviceSettlement("status", "", settleStatus({ state }), null);
+    assert.equal(out.reprobe, state === "starting", state);
+  }
+  assert.equal(M.serviceSettlement("status", "", "garbage", null).reprobe, false);
+});
+
+test("the re-probe after a start is bounded", () => {
+  assert.ok(M.STARTING_REPROBE_MAX > 0);
+  assert.ok(M.STARTING_REPROBE_MAX <= 5,
+    "a unit stuck in 'starting' would turn a settling delay into a poll");
+});

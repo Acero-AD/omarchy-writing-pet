@@ -26,6 +26,13 @@ FOCUSABLE_INPUT = re.compile(
     re.M,
 )
 
+# Rule 6: the calls that can put a process on the CPU. A bar widget that spawns
+# one to answer a question nobody asked is the cost this plugin has spent two
+# rewrites avoiding, so these may only be reached from something a person did.
+SPAWNING_CALLS = re.compile(
+    r"\b(?:refreshServiceStatus|requestService|startService|confirmService|run)\s*\("
+)
+
 failures = []
 
 
@@ -173,6 +180,19 @@ def check(path: Path) -> None:
                     f"    process; everything else belongs in the engine."
                 )
 
+        # Rule 6: nothing spawns during construction.
+        #
+        # Loading the plugin must cost nothing. The status probe is bound to a
+        # person opening the panel; a Component.onCompleted that reached it
+        # would put a process behind every shell start, on every screen, for a
+        # question nobody asked.
+        if stripped.startswith("Component.onCompleted") and SPAWNING_CALLS.search(stripped):
+            failures.append(
+                f"{path.name}:{lineno}: a process is spawned from construction.\n"
+                f"    Loading the widget must spawn nothing; the probe belongs on an\n"
+                f"    explicit open (rule 6)."
+            )
+
         # Rule 4: the widget never writes. The engine is the only writer, and a
         # write path out of the shell is what the crash was reached through.
         if re.search(r"\b(setText|writeAdapter|setData)\s*\(", stripped) or stripped.startswith("atomicWrites:"):
@@ -195,6 +215,28 @@ def check(path: Path) -> None:
                 f"{path.name}:{lineno}: monospace Text uses Text.AlignHCenter.\n"
                 f"    Qt trims trailing whitespace before centring each line, which\n"
                 f"    shears fixed-column text. Left-align it inside a sized canvas."
+            )
+
+    # Rule 6, continued: and nothing spawns on a repeating schedule.
+    #
+    # A one-shot Timer restarted after an action is a settling delay and is
+    # fine. A Timer that is `running: true` and reaches a spawning call is a
+    # poll, and service status is not something to poll: it changes when
+    # somebody installs or stops something, and that somebody is standing
+    # right there.
+    for lineno, body in block_bodies(source, "Timer"):
+        if not SPAWNING_CALLS.search(body):
+            continue
+        if re.search(r"^\s*running:\s*true\s*$", body, re.M):
+            failures.append(
+                f"{path.name}:{lineno}: a Timer that is always running spawns a process.\n"
+                f"    That is a poll. Bind the probe to what the user did, or use a\n"
+                f"    one-shot timer that something restarts (rule 6)."
+            )
+        elif not re.search(r"^\s*repeat:\s*false\s*$", body, re.M):
+            failures.append(
+                f"{path.name}:{lineno}: a Timer spawns a process but does not declare\n"
+                f"    `repeat: false`. A settling delay must say that it is one (rule 6)."
             )
 
     # PanelKeyCatcher runs BeforeItem and will otherwise consume keystrokes

@@ -49,8 +49,8 @@ progress, and a streak of the last seven days.
 > To remove it, see [Removing it](#removing-it) — the engine is a user service
 > and Omarchy runs no uninstall hook, so the order matters.
 
-> **Status:** implemented. Passes `omarchy plugin validate`, `qmllint`, 230
-> Python tests, 68 JavaScript tests, the QML lifecycle lint and the security
+> **Status:** implemented. Passes `omarchy plugin validate`, `qmllint`, 238
+> Python tests, 95 JavaScript tests, the QML lifecycle lint and the security
 > guard, and every service state has been reproduced against a real systemd
 > user manager. The setup card has not yet been driven by hand in a live bar —
 > see [Verification status](#verification-status).
@@ -346,8 +346,8 @@ language without touching this plugin.
 ## Development
 
 ```bash
-node --test tests/*.test.mjs                          # 68 tests, no dependencies
-python3 -m unittest discover -s tests -p 'test_*.py'  # 220 tests, stdlib only
+node --test tests/*.test.mjs                          # 95 tests, no dependencies
+python3 -m unittest discover -s tests -p 'test_*.py'  # 238 tests, stdlib only
 ./scripts/qml-lifecycle-lint.py                       # the postmortem's rules
 ./scripts/security-guard.sh                           # privacy + both allowlists
 omarchy plugin validate .
@@ -355,10 +355,20 @@ qmllint -I "$OMARCHY_PATH/shell" *.qml
 ```
 
 `Model.js` holds every pure function — counting, baselines, rollover, stage and
-mood, art assembly, source validation, and the setup state machine — so the
-logic most likely to be wrong is covered by fast tests instead of needing a
-running shell. The mascot grid invariant is asserted across every set, stage and
-mood; misaligned ASCII is the most visible way this plugin can look broken.
+mood, art assembly, source validation, the setup state machine, and the command
+queue — so the logic most likely to be wrong is covered by fast tests instead of
+needing a running shell. The mascot grid invariant is asserted across every set,
+stage and mood; misaligned ASCII is the most visible way this plugin can look
+broken.
+
+That split is forced, not stylistic. Quickshell ships only `.qmltypes` and links
+its plugin into the `quickshell` binary, so `qmltestrunner` cannot instantiate
+anything that imports Quickshell — there is no way to test `Control.qml` as
+`Control.qml`. Whatever stays in there is verified by running a desktop and
+looking at it. So the decisions where being wrong is expensive live in
+`Model.js`: which argument list an action maps to, whether a second status probe
+is worth spawning, whether two engine calls can overlap, and what a finished
+process meant.
 
 The engine's service management is tested the same way: `tests/test_service.py`
 redirects every destination into a temporary directory and replaces systemd with
@@ -401,7 +411,7 @@ swaps the engine underneath a running process.
 
 | | |
 |---|---|
-| Unit tests, security guard, lifecycle lint, manifest | ✅ 230 Python, 68 JS, all passing |
+| Unit tests, security guard, lifecycle lint, manifest | ✅ 238 Python, 95 JS, all passing |
 | Counting real writing | ✅ verified in Typora and an Obsidian vault |
 | Rollover, restart, restored baselines | ✅ covered by tests and a live restart |
 | Live bar rendering | ✅ the critter renders from the state file |

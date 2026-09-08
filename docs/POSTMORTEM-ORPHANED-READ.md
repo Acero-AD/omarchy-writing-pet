@@ -77,6 +77,14 @@ permanently in flight. Robustness added to one failure mode fed another.
 5. **An isolated shell instance is not evidence of safety.** `Service.qml` ran
    fine in a throwaway Quickshell the same afternoon it was crash-looping the
    desktop. Run both, in that order, every time.
+6. **Nothing spawns before someone asks.** Loading the widget must cost
+   nothing: no process from `Component.onCompleted`, and none from a timer that
+   is always running. The bar builds one widget per screen, so either of those
+   is a process per screen per shell start for a question nobody asked. A
+   one-shot timer restarted after an action is a settling delay and is fine —
+   but it has to say `repeat: false` out loud, because the difference between a
+   debounce and a poll should not depend on the reader knowing which way QML
+   leans. Added 2026-09-08 with the in-panel setup; enforced by the linter.
 
 ## Recognising it again
 

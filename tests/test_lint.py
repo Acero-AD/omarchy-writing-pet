@@ -190,6 +190,87 @@ Singleton {
 ''', "runs 'sh'")
 
 
+class TestNothingSpawnsBeforeSomeoneAsks(LintCase):
+    """Rule 6. Loading the plugin must cost nothing.
+
+    The status probe puts a process on the CPU, and the bar builds one widget
+    per screen. Bound to construction that is a process per screen per shell
+    start, for a question nobody asked; bound to a repeating timer it is a poll
+    of something that only changes when a person installs or stops something.
+    """
+
+    def test_spawning_from_construction_is_rejected(self):
+        self.assertRejected(SINGLETON + '''
+Singleton {
+    Component.onCompleted: root.refreshServiceStatus()
+}
+''', "spawned from construction")
+
+    def test_spawning_a_config_action_from_construction_is_rejected_too(self):
+        self.assertRejected(SINGLETON + '''
+Singleton {
+    Component.onCompleted: root.run("set-goal", 500)
+}
+''', "spawned from construction")
+
+    def test_reading_a_file_from_construction_is_still_allowed(self):
+        """The state and config reads are not processes and never were."""
+        self.assertAccepted(SINGLETON + '''
+Singleton {
+    Component.onCompleted: root.readConfig()
+    FileView {
+        blockLoading: true
+    }
+}
+''')
+
+    def test_a_permanently_running_timer_that_spawns_is_rejected(self):
+        self.assertRejected(SINGLETON + '''
+Singleton {
+    Timer {
+        interval: 2000
+        running: true
+        repeat: true
+        onTriggered: root.refreshServiceStatus()
+    }
+}
+''', "always running spawns a process")
+
+    def test_a_spawning_timer_must_declare_that_it_is_one_shot(self):
+        """QML defaults repeat to false; a reader should not have to know."""
+        self.assertRejected(SINGLETON + '''
+Singleton {
+    Timer {
+        interval: 3000
+        onTriggered: root.refreshServiceStatus()
+    }
+}
+''', "does not declare")
+
+    def test_a_declared_one_shot_settling_timer_is_allowed(self):
+        self.assertAccepted(SINGLETON + '''
+Singleton {
+    Timer {
+        interval: 3000
+        repeat: false
+        onTriggered: root.refreshServiceStatus()
+    }
+}
+''')
+
+    def test_a_repeating_timer_that_spawns_nothing_is_untouched(self):
+        self.assertAccepted(SINGLETON + '''
+Singleton {
+    Timer {
+        interval: 1000
+        running: true
+        repeat: true
+        onTriggered: root.readNow()
+    }
+}
+''')
+
+
 class TestRulesThatDidNotChange(LintCase):
     def test_loader_active_binding_is_still_rejected(self):
         self.assertRejected(PLAIN + '''

@@ -743,6 +743,117 @@ function serviceCommand(enginePath, action) {
 }
 
 
+// ------------------------------------------------------- the command queue
+//
+// Control.qml owns the Process, the Timers and the properties. What it does
+// NOT own is any of the decisions below -- which argument list an action maps
+// to, whether a second probe is worth spawning, whether the queue may start
+// something right now, and what a finished process means.
+//
+// That split is not tidiness. Quickshell's QML modules ship only .qmltypes;
+// the plugin itself is linked into the quickshell binary, so `qmltestrunner`
+// cannot instantiate anything that imports Quickshell and there is no way to
+// test Control.qml as Control.qml. Anything left in there is verified by
+// running a desktop and looking at it. So the parts where being wrong is
+// expensive -- the mapping that decides what gets executed, and the coalescing
+// that decides how many processes a three-monitor bar spawns -- live here,
+// where `node --test` can reach them.
+
+// The complete argument vocabulary. A caller passes a name; if it is not one
+// of these it gets null, and null is not a command line. This is the boundary
+// that keeps a panel button, a config value or an engine message from becoming
+// part of an argv.
+function serviceArgv(action) {
+  if (SERVICE_ACTIONS.indexOf(action) === -1) return null;
+  // --json last, matching the CLI as documented and as a person writes it.
+  return ["service", action, "--json"];
+}
+
+function configArgv(action, value) {
+  if (CONFIG_ACTIONS.indexOf(action) === -1) return null;
+  return ["config", action, String(value)];
+}
+
+var CONFIG_ACTIONS = [
+  "set-goal", "set-mascot", "add-path", "remove-path", "add-app", "remove-app"
+];
+
+// A queue entry is { kind, action, argv }. Kept as plain data so the whole
+// queue can be handed to a test as an array literal.
+function queueEntry(kind, action, argv) {
+  return { kind: kind, action: action, argv: argv };
+}
+
+function queueAppend(pending, entry) {
+  var next = (pending || []).slice();
+  next.push(entry);
+  return next;
+}
+
+// Is this exact action already queued or running? The bar builds one panel per
+// screen and they all open onto the same singleton, so without this a
+// three-monitor desktop spawns three status processes for one glance.
+function queueHolds(pending, current, inflight, kind, action) {
+  if (inflight && current && current.kind === kind && current.action === action)
+    return true;
+  var queued = pending || [];
+  for (var i = 0; i < queued.length; i++) {
+    if (queued[i].kind === kind && queued[i].action === action) return true;
+  }
+  return false;
+}
+
+// What to launch next, or null. Returning null while something is in flight is
+// the whole of the serialisation guarantee: one process at a time, so a
+// service action can never overlap a configuration mutation.
+function queueNext(pending, inflight) {
+  if (inflight) return null;
+  var queued = pending || [];
+  return queued.length > 0 ? queued[0] : null;
+}
+
+// A configuration action rewrites a few hundred bytes. A service action can
+// make several systemd calls, each with its own timeout inside the engine, so
+// one budget for both would either fire on a working install or let a wedged
+// engine hang the queue for most a minute.
+var WATCHDOG_CONFIG_MS = 10000;
+var WATCHDOG_SERVICE_MS = 45000;
+
+function watchdogFor(kind) {
+  return kind === "service" ? WATCHDOG_SERVICE_MS : WATCHDOG_CONFIG_MS;
+}
+
+// What a finished service process meant.
+//
+// The engine prints its result object on both paths -- a failed install still
+// reports the state it left behind, and that is the state the panel must show
+// -- so the output is read whatever the exit code was. `reason` is what the
+// process boundary said (a non-zero exit, a timeout, a missing engine); "" for
+// a clean exit.
+function serviceSettlement(action, reason, raw, previous) {
+  var parsed = parseServiceStatus(raw);
+  var known = parsed.state !== SERVICE_UNKNOWN;
+  var failed = reason !== "" || (known && !parsed.ok);
+  return {
+    // An unparseable payload from a process that also failed tells us nothing
+    // new; keep showing the last state we understood rather than blanking it.
+    status: (known || reason === "") ? parsed : (previous || defaultServiceStatus()),
+    failed: failed,
+    failedAction: failed ? action : "",
+    // The engine's own sentence when it produced one: it names the systemd
+    // step that refused. Otherwise whatever the process boundary gave us.
+    failureReason: failed ? (parsed.message.length > 0 ? parsed.message : reason) : "",
+    rolledBack: parsed.rolledBack,
+    rollbackFailed: parsed.rollbackFailed,
+    // A service still starting has not finished answering. Worth one more
+    // look, a bounded number of times -- a settling delay, not a poll.
+    reprobe: parsed.state === "starting"
+  };
+}
+
+var STARTING_REPROBE_MAX = 3;
+
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     STAGE_COUNT: STAGE_COUNT,
@@ -790,6 +901,18 @@ if (typeof module !== "undefined" && module.exports) {
     serviceDisclosure: serviceDisclosure,
     serviceConfirmTitle: serviceConfirmTitle,
     serviceConfirmLabel: serviceConfirmLabel,
-    serviceProgress: serviceProgress
+    serviceProgress: serviceProgress,
+    CONFIG_ACTIONS: CONFIG_ACTIONS,
+    WATCHDOG_CONFIG_MS: WATCHDOG_CONFIG_MS,
+    WATCHDOG_SERVICE_MS: WATCHDOG_SERVICE_MS,
+    STARTING_REPROBE_MAX: STARTING_REPROBE_MAX,
+    serviceArgv: serviceArgv,
+    configArgv: configArgv,
+    queueEntry: queueEntry,
+    queueAppend: queueAppend,
+    queueHolds: queueHolds,
+    queueNext: queueNext,
+    watchdogFor: watchdogFor,
+    serviceSettlement: serviceSettlement
   };
 }
