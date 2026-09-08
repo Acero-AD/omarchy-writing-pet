@@ -174,3 +174,50 @@ can receive it. The field and catcher are therefore a required pair:
 `blocked` is bound to the field's `activeFocus`, Escape first releases that
 focus, and the lifecycle linter rejects any focusable input without such a
 binding. A second Escape reaches the catcher and closes the panel normally.
+
+## The panel that installs things, 2026-09-07
+
+The panel can now install, update, repair and remove the engine's systemd user
+service. That is a much larger claim than "the panel can set a goal", so it is
+worth being precise about which of these rules it touches, and which it does
+not.
+
+**Rule 4 is unchanged and load-bearing.** The QML in this plugin still writes
+nothing. Not a file, not a unit, not a systemctl invocation. Every effect the
+setup card describes happens in `bin/writing-critter service …`, a separate
+process, one the shell starts and then only reads the exit code and one line of
+JSON from. The distinction that matters is not "does a button cause a write" —
+it always did, that is what `config set-goal` is — but *where the writing code
+lives*. It lives outside the shell, where a bug is a dead script rather than a
+dead desktop. That was the whole conclusion of this document and it is the same
+conclusion here.
+
+**Rule 3 (`Process` ownership) is the one under pressure**, because setup is a
+much more tempting place to spawn something from the panel: the button is in
+the panel, the state is in the panel, and the panel is where the failure needs
+to be shown. It is not spawned from the panel. `Control.qml` — a singleton,
+so nothing can destroy it mid-flight — owns the one `Process`, and the panel
+calls a function on it. Service actions share the *same* queue as configuration
+actions rather than getting a second `Process`, so there is still exactly one
+subprocess in this plugin's half of the shell, and two of them can never
+overlap.
+
+**What the panel supplies is a name, never an argument list.** `requestService`
+takes one of five action names and maps it, in `Control.qml`, to a fixed argv.
+There is no path from a panel button, a config value, or an engine message to a
+command line. The lifecycle linter enforces the program; the security guard
+enforces the argument shape on both sides of the process boundary.
+
+**The status probe is bound to an explicit user action.** Loading the widget
+spawns nothing; opening the panel spawns one probe, shared across every monitor
+because the singleton coalesces them. The one timer here is a bounded settling
+delay after a lifecycle action — three checks, then it stops — and not a poll.
+Rule 3 in its original form ("retry timers belong outside the thing they
+retry") is satisfied the same way everything else here is: the timer lives in
+the singleton, not in the panel that asked.
+
+The reason to write all of this down is the same as in the section above. A
+future reader will find a plugin whose bar panel installs a systemd unit and
+will reasonably wonder whether the lesson of 2026-09-02 was quietly dropped.
+It was not. The lesson was *where the dangerous code runs*, and it still runs
+somewhere a crash cannot take the desktop with it.

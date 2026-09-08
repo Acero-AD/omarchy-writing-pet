@@ -37,27 +37,21 @@ progress, and a streak of the last seven days.
 > async read can outlive a teardown.
 >
 > What is verified: the engine counts real writing in a real editor; the widget
-> renders it; and the shell survives a truncated, malformed, hostile,
-> unknown-schema or entirely absent state file, recovering without a restart.
+> renders it; the shell survives a truncated, malformed, hostile, unknown-schema
+> or entirely absent state file, recovering without a restart; and the engine's
+> service management — install, update, repair, rollback, removal — is covered
+> end to end against a scripted systemd.
 >
-> What is not: a long live soak, and the vertical-bar and proportional-font
-> paths. Until those are done, treat this as pre-release rather than something
-> to depend on.
+> What is not: the setup card driven by hand in a running bar, a long live soak,
+> and the vertical-bar and proportional-font paths. Until those are done, treat
+> this as pre-release rather than something to depend on.
 >
-> To remove it:
->
-> ```bash
-> omarchy plugin remove io.github.acero-ad.writing-critter --yes
-> rm -rf ~/.config/omarchy/plugins/io.github.acero-ad.writing-critter
-> omarchy-restart-shell
-> ```
->
-> The crash is not yet diagnosed. Everything below describes the intended
-> behaviour and remains accurate as a design document.
+> To remove it, see [Removing it](#removing-it) — the engine is a user service
+> and Omarchy runs no uninstall hook, so the order matters.
 
-> **Status:** implemented, not yet verified against a live Omarchy session.
-> Passes `omarchy plugin validate`, `qmllint`, 115 Python tests, 41 JavaScript
-> tests, and the security guard. Runtime behaviour in a real bar has not been exercised yet — see
+> **Status:** implemented. Passes `omarchy plugin validate`, `qmllint`, 221
+> Python tests, 68 JavaScript tests, the QML lifecycle lint and the security
+> guard. The setup card has not yet been driven by hand in a live bar — see
 > [Verification status](#verification-status).
 
 ## It does not read your keyboard
@@ -83,29 +77,50 @@ is live in practice with no privilege at all.
 - **No keyboard or input-device access.** No `/dev/input`, no evdev, no
   libinput, no `input` group, ever.
 - **No network access.** Nothing leaves your machine. There is no update check.
-- **No privilege escalation.** No sudo, no polkit, no systemd units, no extra
-  daemons, no second shell process.
+- **No privilege escalation.** No sudo, no polkit, no package manager, no
+  root, no second shell process. Setup writes two files you own and starts one
+  **systemd *user* service**, running as you — see
+  [Setting up the engine](#setting-up-the-engine). Nothing here needs, asks
+  for, or can obtain administrator access.
 - **No storage of anything you write.** File text is counted in memory and
   discarded. State holds only integers, dates, and the paths you chose. Nothing
   you write is ever logged.
 
-External commands are limited to `find`, `wc`, one `mkdir -p` at startup for the
-plugin's own state directory, and `notify-send` only if you opt into goal
-notifications.
+### What it runs
 
-`scripts/security-guard.sh` enforces all of the above in CI, including the
-command allowlist. A regression breaks the build.
+Two lists, because two processes are involved.
+
+The **desktop shell** runs exactly one program: `bin/writing-critter`, the
+engine that ships inside this plugin, from a QML singleton, with an argument
+list built in `Control.qml` from a fixed table. No panel button, config value
+or engine message can become part of a command line.
+
+The **engine** runs exactly two: `hyprctl activewindow -j`, to learn which
+window has focus at startup, and `systemctl --user` with one of eight verbs
+(`show`, `daemon-reload`, `enable`, `disable`, `start`, `stop`, `restart`,
+`reset-failed`) against one unit, `writing-critter.service`. No path is ever
+passed to either of them.
+
+`scripts/security-guard.sh` enforces all of the above in CI — both allowlists,
+the absence of any shell, and the ban on input capture, network access and
+privilege escalation. `tests/test_guard.py` breaks each rule on purpose and
+asserts the guard rejects it, because a guard that only ever passes has not
+been tested. A regression breaks the build.
 
 ### Where state lives
 
 ```
-~/.local/state/omarchy/io.github.acero-ad.writing-critter/
-├── state.json     daily total, per-file baselines, history, settings
-└── sources/       companion drop-box (see docs/COMPANION_PROTOCOL.md)
+~/.config/writing-critter/
+└── config.json    your settings; the engine is its only writer
+
+~/.local/state/writing-critter/
+├── state.json     today's total, goal, mascot, what the bar reads
+└── tracking.json  per-file baselines and history
 ```
 
-Delete that directory to reset everything. The plugin never writes your
-`shell.json`.
+Delete those two directories to reset everything. Removing the engine does
+**not** touch them — see [Removing it](#removing-it). The plugin never writes
+your `shell.json`.
 
 ## Install
 
@@ -113,8 +128,96 @@ Delete that directory to reset everything. The plugin never writes your
 omarchy plugin add https://github.com/Acero-AD/omarchy-writing-pet.git --enable
 ```
 
-Then tell it where you write. Open the panel, click **Settings**, and add a
-watched path.
+Then click the critter in your bar. It will offer to set up its engine, and
+after that ask you where you write.
+
+## Setting up the engine
+
+The counting runs in a separate process, outside the desktop shell, because an
+earlier version did it inside `quickshell` and crashed the whole desktop. That
+separation is not negotiable — but it does mean there is a second thing to
+install, and Omarchy deliberately runs no install hook when it adds a plugin.
+So a freshly added Writing Critter is a bar widget with nothing behind it.
+
+Open the panel and it says so, and offers to fix it. Before anything happens
+you get a review naming every effect:
+
+```
+Set up the engine?
+· Copies the engine to /home/you/.local/bin/writing-critter
+· Writes /home/you/.config/systemd/user/writing-critter.service
+· Enables and starts that service as you — not as root
+· No administrator access, no network, no package manager
+· Your settings, today's count and your history are not touched
+
+  [ Install and start ]   [ Cancel ]
+```
+
+Nothing is written until you press the second button. Cancel does nothing at
+all.
+
+The panel asks the engine what state it is in each time you open it, and offers
+the one action that fits:
+
+| What it found | What it offers |
+|---|---|
+| Nothing installed | **Review setup**, then the disclosure above |
+| Installed, but older than this plugin | **Update and restart**, after a confirmation |
+| Installed and current, not running | **Start engine** |
+| Running but not publishing a count | **Restart engine** |
+| Just started | waits, and checks again |
+| Running and counting | nothing — the card disappears |
+
+Start and restart do not ask for confirmation: they replace no file and remove
+nothing, and a dialog for them would only teach you to dismiss dialogs.
+
+If anything fails, the panel says which step refused and why, leaves the rest
+of the settings working, and shows the command to run yourself. An install that
+fails part-way puts the previous engine back rather than leaving you with half
+of a new one; if it could not restore the *service* as well, it says that
+separately.
+
+### The same thing from a terminal
+
+`install.sh` and `uninstall.sh` are thin wrappers around the same code the panel
+runs, so the two cannot disagree about what installing means:
+
+```bash
+./install.sh                          # or: bin/writing-critter service install
+bin/writing-critter service status    # what is installed, and is it running
+bin/writing-critter service restart
+./uninstall.sh                        # or: bin/writing-critter service uninstall
+```
+
+Add `--json` to any `service` subcommand for the machine-readable object the
+panel reads.
+
+## Removing it
+
+Omarchy runs no uninstall hook, so the engine has to go **before** the plugin —
+afterwards the checkout that knows how to remove it is gone.
+
+```bash
+# 1. remove the engine and its user service (or use "Remove engine" in the panel)
+~/.config/omarchy/plugins/io.github.acero-ad.writing-critter/uninstall.sh
+
+# 2. then remove the plugin
+omarchy plugin remove io.github.acero-ad.writing-critter --yes
+omarchy-restart-shell
+```
+
+Removing the engine stops and disables the service and deletes exactly two
+files: `~/.local/bin/writing-critter` and
+`~/.config/systemd/user/writing-critter.service`. **Your settings, today's
+count and your history stay**, so installing again later resumes rather than
+restarts. To delete those too:
+
+```bash
+rm -rf ~/.config/writing-critter ~/.local/state/writing-critter
+```
+
+If you removed the plugin first, the service files are still there and still
+named above — remove them by hand, or reinstall the plugin and use the panel.
 
 ## Configure
 
@@ -242,49 +345,95 @@ language without touching this plugin.
 ## Development
 
 ```bash
-node --test tests/*.test.mjs    # 41 tests, no dependencies
-./scripts/security-guard.sh     # privacy constraints + command allowlist
+node --test tests/*.test.mjs                          # 68 tests, no dependencies
+python3 -m unittest discover -s tests -p 'test_*.py'  # 220 tests, stdlib only
+./scripts/qml-lifecycle-lint.py                       # the postmortem's rules
+./scripts/security-guard.sh                           # privacy + both allowlists
 omarchy plugin validate .
 qmllint -I "$OMARCHY_PATH/shell" *.qml
 ```
 
 `Model.js` holds every pure function — counting, baselines, rollover, stage and
-mood, art assembly, source validation — so the logic most likely to be wrong is
-covered by fast tests instead of needing a running shell. The mascot grid
-invariant is asserted across every set, stage and mood; misaligned ASCII is the
-most visible way this plugin can look broken.
+mood, art assembly, source validation, and the setup state machine — so the
+logic most likely to be wrong is covered by fast tests instead of needing a
+running shell. The mascot grid invariant is asserted across every set, stage and
+mood; misaligned ASCII is the most visible way this plugin can look broken.
+
+The engine's service management is tested the same way: `tests/test_service.py`
+redirects every destination into a temporary directory and replaces systemd with
+a fake, but only at the point where a process would be spawned — the real code
+still builds the real argument lists, and the tests assert on those. The fake's
+behaviour comes from output captured off a real systemd, kept in
+`tests/fixtures_systemctl.py` with the reasoning that made it worth capturing.
+
+Two of the guards here have failed open and been caught by their own probes, so
+`tests/test_lint.py` and `tests/test_guard.py` break every rule deliberately and
+assert the rejection. A rule with no probe is a rule nobody has tested.
 
 ## Updating
 
-`omarchy plugin update` reloads the plugin, but **QML singletons are cached for
-the life of the shell process**, and this plugin has two of them: the state
-reader and the settings controller. A plugin update therefore leaves the
-previously loaded ones running: the bar keeps whatever behaviour it started
-with, no matter what the files on disk now say. This cost an hour of chasing a
-bug that had already been fixed.
+Updating this plugin updates *two* things, and they move independently.
 
-After updating, restart the shell:
+**The shell side.** `omarchy plugin update` reloads the plugin, but **QML
+singletons are cached for the life of the shell process**, and this plugin has
+two of them: the state reader and the settings controller. A plugin update
+therefore leaves the previously loaded ones running: the bar keeps whatever
+behaviour it started with, no matter what the files on disk now say. This cost
+an hour of chasing a bug that had already been fixed. So after updating:
 
 ```bash
 omarchy-restart-shell
 ```
 
-The engine is a separate systemd service and is not affected; `./install.sh`
-restarts it on its own.
+**The engine side.** The engine systemd runs is a *copy*, in `~/.local/bin`. A
+plugin update changes the checkout and leaves that copy untouched, still
+serving the old code. The panel now notices: it compares the installed engine
+and unit byte for byte against the ones in the checkout, and if either differs
+it says an update is available and offers **Update and restart**.
+
+The comparison is on bytes, not version strings, so a development build or a
+changed unit file counts as drift even when the version has not moved. And
+nothing is replaced without you saying so — opening a panel never silently
+swaps the engine underneath a running process.
 
 ## Verification status
 
 | | |
 |---|---|
-| Unit tests, security guard, lifecycle lint, manifest | ✅ 115 Python, 41 JS, all passing |
+| Unit tests, security guard, lifecycle lint, manifest | ✅ 221 Python, 68 JS, all passing |
 | Counting real writing | ✅ verified in Typora and an Obsidian vault |
 | Rollover, restart, restored baselines | ✅ covered by tests and a live restart |
 | Live bar rendering | ✅ the critter renders from the state file |
 | Malformed / absent state file | ✅ shell survives truncated, non-object, hostile, unknown-schema and deleted; recovers with no restart |
+| Engine setup, update, repair, removal | ✅ every state and transition, through the real CLI in an isolated home, against a scripted systemd |
+| Rollback of a failed install | ✅ files and prior running state restored; rollback failure reported separately |
+| Setup preserves settings and history | ✅ asserted byte-for-byte across install, update, rollback and uninstall |
+| `systemctl` behaviour the parser relies on | ✅ captured off systemd 261 on this host, kept as fixtures with the reasoning |
+| Drift detection against a real installation | ✅ the shipped `service status` correctly reported this machine's installed engine as outdated |
+| Setup card driven by hand in a live bar | ⬜ not yet exercised — needs a shell restart and a person |
 | Service mounting | n/a — the engine is a systemd user service, not a shell service |
 | Shell stability under long use | ⚠️ shell PID unchanged so far; a proper soak is still owed |
 | Vertical bar, proportional shell font | ⬜ not yet exercised |
 | Screenshot / marketplace submission | ⬜ pending |
+
+### For a marketplace reviewer
+
+`omarchy plugin validate` reports this repository as having **installer** and
+**service-management** capabilities. Both are real and both are the point of
+the setup flow above; they are declared here rather than worked around.
+
+What they cover, exactly:
+
+- `install.sh` / `uninstall.sh`, which delegate to `bin/writing-critter service`.
+- Two files written, at fixed paths under the invoking user's own `$HOME` and
+  `$XDG_CONFIG_HOME`. Neither destination can be redirected by an argument, a
+  config value, or anything the panel passes.
+- One systemd **user** unit, enabled and started as that user.
+
+What they do not cover, enforced by `scripts/security-guard.sh` in CI: no
+`sudo`, no `polkit`, no package manager, no network, no download, no remote
+code, no shell, no system-wide path, and no caller-supplied path on any command
+line.
 
 Design rationale and the full technical spec live in
 [`writing-critter-spec.md`](writing-critter-spec.md) and

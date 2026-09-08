@@ -31,7 +31,26 @@ jobs:
           python3 -m py_compile bin/writing-critter
           ./bin/writing-critter --help > /dev/null
           ./bin/writing-critter config show > /dev/null
+          ./bin/writing-critter service --help > /dev/null
           echo "engine ok"
+
+      # A CI runner has systemctl but no user session bus, which is exactly the
+      # "systemd could not be asked" path. Status must still answer, from the
+      # evidence it does have, and still exit 0 -- a probe that cannot reach
+      # systemd is a probe with an answer, not a failed command.
+      - name: Service status answers where there is no user session
+        run: |
+          out=$(./bin/writing-critter service status --json)
+          echo "$out"
+          python3 - "$out" <<'PY'
+          import json, sys
+          s = json.loads(sys.argv[1])
+          assert s["schema"] == 1, s
+          assert s["state"] in ("not-installed", "update-available", "stopped",
+                                "starting", "unhealthy", "ready"), s["state"]
+          assert isinstance(s["message"], str)
+          print("service status degrades correctly:", s["state"])
+          PY
 
       - name: QML lifecycle rules (see docs/POSTMORTEM-ORPHANED-READ.md)
         run: ./scripts/qml-lifecycle-lint.py

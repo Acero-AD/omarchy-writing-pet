@@ -452,6 +452,297 @@ function parseConfig(raw, previous) {
   return next;
 }
 
+// ------------------------------------------------ untrusted service status
+//
+// The engine's `service ... --json` output, parsed the same way state.json is:
+// as something written by another process that may be any version, may be
+// truncated, and may not be JSON at all. The difference is what a wrong answer
+// costs here. A misread state file draws the wrong critter; a misread service
+// status offers the wrong button, and one of those buttons replaces files.
+//
+// So this fails closed rather than partially. Anything unrecognised -- a schema
+// this build does not know, a state outside the published vocabulary, a payload
+// too large to be one status line -- collapses to "unknown", for which the
+// panel offers no action at all beyond asking again.
+
+var SERVICE_SCHEMA = 1;
+
+// Kept in step with SERVICE_STATES in bin/writing-critter. A state the engine
+// grows and this list does not know reads as unknown, which is the safe
+// direction: an old panel beside a new engine offers nothing rather than
+// guessing what a name it has never seen means.
+var SERVICE_STATES = [
+  "not-installed", "update-available", "stopped", "starting", "unhealthy", "ready"
+];
+var SERVICE_UNKNOWN = "unknown";
+
+// The actions the panel may ask for, and the subset that must be confirmed
+// first. start and restart are absent from CONFIRM deliberately: they replace
+// no file and remove nothing, so a confirmation for them would be a dialog
+// that teaches the user to dismiss dialogs.
+var SERVICE_ACTIONS = ["status", "install", "start", "restart", "uninstall"];
+var SERVICE_CONFIRM = ["install", "uninstall"];
+
+// One status line is a few hundred bytes. The cap is three orders of magnitude
+// above that and still bounds what the shell process will hold.
+var SERVICE_RAW_MAX = 16384;
+var SERVICE_TEXT_MAX = 512;
+
+function defaultServiceStatus() {
+  return {
+    schema: 0,
+    action: "",
+    ok: false,
+    changed: false,
+    rolledBack: false,
+    rollbackFailed: false,
+    message: "",
+    state: SERVICE_UNKNOWN,
+    installed: false,
+    current: false,
+    enabled: false,
+    activeState: SERVICE_UNKNOWN,
+    stateFresh: false,
+    sourceAvailable: false,
+    sourceVersion: "",
+    installedVersion: "",
+    enginePath: "",
+    unitPath: ""
+  };
+}
+
+function serviceText(value) {
+  if (typeof value !== "string") return "";
+  // Control characters are stripped, not escaped. This text is rendered into a
+  // bar panel, and an engine message is not a place that needs newlines.
+  var out = "";
+  for (var i = 0; i < value.length && out.length < SERVICE_TEXT_MAX; i++) {
+    var code = value.charCodeAt(i);
+    out += (code < 32 || code === 127) ? " " : value.charAt(i);
+  }
+  return out;
+}
+
+// Booleans only. A truthy string or a 1 is not a true the engine wrote, so it
+// is not treated as one.
+function serviceFlag(value) {
+  return value === true;
+}
+
+// Returns the parsed status, or a fail-closed "unknown" object. Never throws.
+function parseServiceStatus(raw) {
+  var next = defaultServiceStatus();
+  if (typeof raw !== "string") return next;
+  var text = raw.trim();
+  if (text.length === 0 || text.length > SERVICE_RAW_MAX) return next;
+
+  var parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return next;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return next;
+  // An unknown schema is not a payload to salvage fields from. The names could
+  // mean anything in a version this build has never seen.
+  if (parsed.schema !== SERVICE_SCHEMA) return next;
+  if (SERVICE_STATES.indexOf(parsed.state) === -1) return next;
+
+  next.schema = SERVICE_SCHEMA;
+  next.state = parsed.state;
+  next.action = SERVICE_ACTIONS.indexOf(parsed.action) === -1 ? "" : parsed.action;
+  next.ok = serviceFlag(parsed.ok);
+  next.changed = serviceFlag(parsed.changed);
+  next.rolledBack = serviceFlag(parsed.rolledBack);
+  next.rollbackFailed = serviceFlag(parsed.rollbackFailed);
+  next.installed = serviceFlag(parsed.installed);
+  next.current = serviceFlag(parsed.current);
+  next.enabled = serviceFlag(parsed.enabled);
+  next.stateFresh = serviceFlag(parsed.stateFresh);
+  next.sourceAvailable = serviceFlag(parsed.sourceAvailable);
+  next.message = serviceText(parsed.message);
+  next.activeState = serviceText(parsed.activeState) || SERVICE_UNKNOWN;
+  next.sourceVersion = serviceText(parsed.sourceVersion);
+  next.installedVersion = serviceText(parsed.installedVersion);
+  next.enginePath = serviceText(parsed.enginePath);
+  next.unitPath = serviceText(parsed.unitPath);
+  return next;
+}
+
+// ------------------------------------------------------ the setup decision
+//
+// One state in, one offer out. The panel renders this and does not decide
+// anything itself, so "which button does a stopped service get" is answered by
+// a test rather than by a chain of bindings that has to be read in a running
+// shell to be understood.
+//
+//   not-installed ---- review ----> install ----+
+//   update-available - confirm ---> install ----+
+//   stopped ------------------------ start -----+--> ready
+//   unhealthy ---------------------- restart ---+
+//   starting ---------- wait, ask again --------+
+//   unknown ----------- ask again
+//
+// `needsSetup` is what makes the card appear at all; a ready engine shows the
+// compact line the panel already had.
+
+var SERVICE_OFFERS = {
+  "not-installed": {
+    severity: "setup",
+    headline: "The counting engine is not installed.",
+    detail: "Nothing is counting yet. Setup copies the engine and starts it as your own user service.",
+    action: "install",
+    label: "Review setup",
+    confirm: true
+  },
+  "update-available": {
+    severity: "setup",
+    headline: "This plugin ships a newer engine than the one installed.",
+    detail: "The running engine is still the old one until you update it.",
+    action: "install",
+    label: "Update and restart",
+    confirm: true
+  },
+  "stopped": {
+    severity: "repair",
+    headline: "The engine is installed but not running.",
+    detail: "Nothing is being counted while it is stopped.",
+    action: "start",
+    label: "Start engine",
+    confirm: false
+  },
+  "starting": {
+    severity: "repair",
+    headline: "The engine is starting.",
+    detail: "It has not published a count yet.",
+    action: "status",
+    label: "Check again",
+    confirm: false
+  },
+  "unhealthy": {
+    severity: "repair",
+    headline: "The engine is running but not counting.",
+    detail: "It has not published anything recently. Restarting usually fixes it.",
+    action: "restart",
+    label: "Restart engine",
+    confirm: false
+  },
+  "ready": {
+    severity: "ok",
+    headline: "The engine is installed and running.",
+    detail: "",
+    action: "",
+    label: "",
+    confirm: false
+  },
+  "unknown": {
+    severity: "unknown",
+    headline: "Could not read the engine's status.",
+    detail: "The plugin's own engine answered with something it did not understand.",
+    action: "status",
+    label: "Check again",
+    confirm: false
+  }
+};
+
+function serviceOffer(state) {
+  var offer = SERVICE_OFFERS[state];
+  return offer ? offer : SERVICE_OFFERS[SERVICE_UNKNOWN];
+}
+
+// True when the panel must show the setup card rather than the compact line.
+function serviceNeedsSetup(state) {
+  return serviceOffer(state).severity !== "ok";
+}
+
+// Whether removing the engine is even meaningful. Offering "remove" for
+// something that is not installed is an action that can only disappoint.
+function serviceCanRemove(status) {
+  // `status && ...` returned the status itself when it was null, which QML
+  // would have coerced correctly and a test would not. A predicate returns a
+  // boolean.
+  return !!status && status.installed === true;
+}
+
+// The review the user reads before anything is installed or removed.
+//
+// It is generated rather than written into the panel so that it says what the
+// engine actually reported it will do -- the destinations below are the ones
+// status resolved, not a guess repeated in a second place that can fall out of
+// step with the first.
+
+function servicePlaceholder(value, fallback) {
+  return (typeof value === "string" && value.length > 0) ? value : fallback;
+}
+
+function serviceDisclosure(action, status) {
+  var s = status || defaultServiceStatus();
+  var enginePath = servicePlaceholder(s.enginePath, "~/.local/bin/writing-critter");
+  var unitPath = servicePlaceholder(s.unitPath, "~/.config/systemd/user/writing-critter.service");
+
+  if (action === "install") {
+    return [
+      (s.installed ? "Replaces " : "Copies the engine to ") + enginePath,
+      (s.installed ? "Replaces " : "Writes ") + unitPath,
+      "Enables and starts that service as you — not as root",
+      "No administrator access, no network, no package manager",
+      "Your settings, today's count and your history are not touched"
+    ];
+  }
+  if (action === "uninstall") {
+    return [
+      "Stops and disables the service",
+      "Removes " + enginePath,
+      "Removes " + unitPath,
+      "Keeps your settings, today's count and your history",
+      "Installing again later resumes from what is kept"
+    ];
+  }
+  return [];
+}
+
+function serviceConfirmTitle(action, status) {
+  var s = status || defaultServiceStatus();
+  if (action === "install")
+    return s.installed ? "Update the engine?" : "Set up the engine?";
+  if (action === "uninstall")
+    return "Remove the engine?";
+  return "";
+}
+
+function serviceConfirmLabel(action, status) {
+  var s = status || defaultServiceStatus();
+  if (action === "install")
+    return s.installed ? "Update and restart" : "Install and start";
+  if (action === "uninstall")
+    return "Remove engine";
+  return "";
+}
+
+// What the panel says while an action is in flight. Named per action because
+// "working..." tells a user nothing about what they are waiting for.
+function serviceProgress(action) {
+  var text = {
+    install: "installing and starting the engine…",
+    start: "starting the engine…",
+    restart: "restarting the engine…",
+    uninstall: "removing the engine…",
+    status: "checking…"
+  };
+  return text[action] || "";
+}
+
+// What to run in a terminal when the panel's own attempt failed. The engine
+// path comes from the shell's own resolution of the file beside it, never from
+// the engine's output: a failure message is not a source of paths to run.
+function serviceCommand(enginePath, action) {
+  if (SERVICE_ACTIONS.indexOf(action) === -1) return "";
+  var path = typeof enginePath === "string" && enginePath.length > 0
+    ? enginePath : "writing-critter";
+  return path + " service " + action;
+}
+
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     STAGE_COUNT: STAGE_COUNT,
@@ -481,6 +772,24 @@ if (typeof module !== "undefined" && module.exports) {
     PATH_MAX: PATH_MAX,
     LIST_MAX: LIST_MAX,
     defaultConfig: defaultConfig,
-    parseConfig: parseConfig
+    parseConfig: parseConfig,
+    SERVICE_SCHEMA: SERVICE_SCHEMA,
+    SERVICE_STATES: SERVICE_STATES,
+    SERVICE_UNKNOWN: SERVICE_UNKNOWN,
+    SERVICE_ACTIONS: SERVICE_ACTIONS,
+    SERVICE_CONFIRM: SERVICE_CONFIRM,
+    SERVICE_RAW_MAX: SERVICE_RAW_MAX,
+    SERVICE_TEXT_MAX: SERVICE_TEXT_MAX,
+    SERVICE_OFFERS: SERVICE_OFFERS,
+    defaultServiceStatus: defaultServiceStatus,
+    parseServiceStatus: parseServiceStatus,
+    serviceOffer: serviceOffer,
+    serviceNeedsSetup: serviceNeedsSetup,
+    serviceCanRemove: serviceCanRemove,
+    serviceCommand: serviceCommand,
+    serviceDisclosure: serviceDisclosure,
+    serviceConfirmTitle: serviceConfirmTitle,
+    serviceConfirmLabel: serviceConfirmLabel,
+    serviceProgress: serviceProgress
   };
 }

@@ -135,6 +135,61 @@ Singleton {
 ''', "could be any of")
 
 
+class TestConcatenatedArgumentLists(LintCase):
+    """The shape a queued command takes: one literal program, arguments appended.
+
+    Splitting the argument list on its first comma used to swallow this whole
+    expression -- there is no comma in `[enginePath].concat(argv)` -- and report
+    the command as unreadable. That failed closed, which is the right direction,
+    but it also meant the rule could not be satisfied by the one shape the
+    plugin actually needs.
+    """
+
+    def test_the_engine_with_appended_arguments_is_allowed(self):
+        self.assertAccepted(SINGLETON + '''
+Singleton {
+    readonly property string enginePath: "/plugins/writing-critter/bin/writing-critter"
+    property var current: ({ argv: [] })
+    Process {
+        command: [root.enginePath].concat(root.current.argv)
+    }
+}
+''')
+
+    def test_a_foreign_program_with_appended_arguments_is_still_rejected(self):
+        self.assertRejected(SINGLETON + '''
+Singleton {
+    Process {
+        command: ["/usr/bin/systemctl"].concat(root.current.argv)
+    }
+}
+''', "runs 'systemctl'")
+
+    def test_an_unreadable_program_with_appended_arguments_is_still_rejected(self):
+        self.assertRejected(SINGLETON + '''
+Singleton {
+    Process {
+        command: [somethingElse].concat(root.current.argv)
+    }
+}
+''', "cannot determine the program")
+
+    def test_a_second_process_running_something_else_is_rejected(self):
+        """Setup must not introduce a second executable path into the shell."""
+        self.assertRejected(SINGLETON + '''
+Singleton {
+    readonly property string enginePath: "/plugins/writing-critter/bin/writing-critter"
+    Process {
+        command: [root.enginePath].concat(root.current.argv)
+    }
+    Process {
+        id: installer
+        command: ["/bin/sh", "install.sh"]
+    }
+}
+''', "runs 'sh'")
+
+
 class TestRulesThatDidNotChange(LintCase):
     def test_loader_active_binding_is_still_rejected(self):
         self.assertRejected(PLAIN + '''

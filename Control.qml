@@ -108,24 +108,73 @@ Singleton {
         onTriggered: root.readConfig()
     }
 
+    // ---------------------------------------------------- service state
+    //
+    // Whether the engine is installed at all, and whether its user service is
+    // running. This is a different question from `available` above, and the two
+    // were briefly conflated: `available` is "can the shell launch the copy
+    // that ships beside this QML", which is what decides whether the settings
+    // controls do anything. Everything here is about the *other* copy -- the
+    // one in ~/.local/bin that systemd runs -- and a panel whose engine is not
+    // installed must still be able to configure it, so a missing service never
+    // disables a setting.
+    //
+    // The state file cannot answer this. A stale state.json outlives a stopped
+    // service and says nothing about an outdated binary, so the engine is asked
+    // directly, and only when a user opens a panel.
+
+    property var serviceStatus: Model.defaultServiceStatus()
+    readonly property string serviceState: root.serviceStatus.state
+
+    // The lifecycle action in flight, or "". Distinct from `busy` because the
+    // panel disables setup buttons during setup, not during a goal edit.
+    property string serviceAction: ""
+    // The action waiting for the user to confirm the disclosure, or "". Held
+    // here rather than in the panel so that a second monitor's panel is not
+    // left showing a review for something already installed.
+    property string pendingConfirm: ""
+    property string serviceFailedAction: ""
+    property string serviceFailureReason: ""
+    property bool serviceRolledBack: false
+    property bool serviceRollbackFailed: false
+    // True once a status probe has answered, so the panel can tell "not
+    // installed" from "not asked yet" and avoid offering setup for a moment
+    // before the real answer lands.
+    property bool serviceProbed: false
+
+    readonly property bool serviceBusy: root.serviceAction.length > 0
+
     // ------------------------------------------------------ command queue
 
-    // The complete vocabulary. Every one of these already exists in the engine
-    // and already validates its own input; the panel adds no semantics and
-    // duplicates no validation.
+    // The complete vocabulary, in two halves. Every one of these already exists
+    // in the engine and already validates its own input; the panel adds no
+    // semantics and duplicates no validation.
+    //
+    // A caller names an action. It never supplies an argument list: the
+    // mapping from "install" to the argv below happens here, so there is no
+    // path by which a panel button, a config value or an engine message can
+    // become part of a command line.
     readonly property var actions: [
         "set-goal", "set-mascot", "add-path", "remove-path", "add-app", "remove-app"
     ]
+    readonly property var serviceActions: Model.SERVICE_ACTIONS
 
     // Why a queue rather than firing each click straight at a Process: two
     // clicks a tenth of a second apart would otherwise be two engine processes
     // racing on the same read-modify-write. The engine takes a lock as well --
     // that is the real fix, and it protects the terminal too -- but serialising
     // here keeps failures attributable to the action that caused them.
+    // Each entry is { kind, action, argv }. It used to be a bare [action,
+    // value] pair with "config" prepended at the Process; now that two
+    // subcommand families share this queue, the entry carries the whole
+    // argument list and the Process concatenates rather than composes.
     property var pending: []
-    property var current: []
+    property var current: ({ kind: "", action: "", argv: [] })
     property bool inflight: false
     property string capturedError: ""
+    // Bounded on the way in: this holds the engine's status line, and a
+    // runaway writer must not grow a string inside the shell process.
+    property string capturedOut: ""
 
     // The action whose failure is being reported, and why. Cleared by the next
     // success, so the panel never shows a stale complaint.
@@ -159,10 +208,85 @@ Singleton {
             root.failureReason = "not an allowed action";
             return false;
         }
+        return root.enqueue("config", action, ["config", action, String(value)]);
+    }
+
+    // ---------------------------------------------------- service actions
+    //
+    // The panel names one of five actions and gets one of five fixed argument
+    // lists. There is no branch here that reaches a string the user typed, a
+    // path the engine reported, or a systemctl verb: those all live one process
+    // away, in code that ships with this file and is tested without a desktop.
+
+    function serviceArgv(action) {
+        // --json last, matching the CLI as documented and as a person writes it.
+        return ["service", action, "--json"];
+    }
+
+    function requestService(action) {
+        if (root.serviceActions.indexOf(action) === -1) {
+            root.serviceFailedAction = action;
+            root.serviceFailureReason = "not an allowed action";
+            return false;
+        }
+        if (!root.available)
+            return false;
+        // Installing and removing files is disclosed and confirmed first.
+        // Starting and restarting an installation the user already has is a
+        // repair, not a decision, and asking would only train them to click
+        // through the asking.
+        if (Model.SERVICE_CONFIRM.indexOf(action) !== -1) {
+            root.pendingConfirm = action;
+            return true;
+        }
+        return root.startService(action);
+    }
+
+    function confirmService() {
+        var action = root.pendingConfirm;
+        root.pendingConfirm = "";
+        if (action.length === 0)
+            return false;
+        return root.startService(action);
+    }
+
+    function cancelService() {
+        root.pendingConfirm = "";
+    }
+
+    function startService(action) {
+        if (root.serviceActions.indexOf(action) === -1 || !root.available)
+            return false;
+        root.startingProbes = 0;
+        return root.enqueue("service", action, root.serviceArgv(action));
+    }
+
+    // One probe answers every panel. The bar builds one of these per screen and
+    // they all open onto the same singleton, so without this a three-monitor
+    // desktop would run three status processes for one glance at the bar.
+    function refreshServiceStatus() {
+        if (!root.available)
+            return false;
+        if (root.statusPending())
+            return true;
+        return root.enqueue("service", "status", root.serviceArgv("status"));
+    }
+
+    function statusPending() {
+        if (root.inflight && root.current.kind === "service" && root.current.action === "status")
+            return true;
+        for (var i = 0; i < root.pending.length; i++) {
+            if (root.pending[i].kind === "service" && root.pending[i].action === "status")
+                return true;
+        }
+        return false;
+    }
+
+    function enqueue(kind, action, argv) {
         if (!root.available)
             return false;
         var queued = root.pending.slice();
-        queued.push([action, String(value)]);
+        queued.push({ kind: kind, action: action, argv: argv });
         root.pending = queued;
         root.pump();
         return true;
@@ -173,6 +297,8 @@ Singleton {
             return;
         root.current = root.pending[0];
         root.capturedError = "";
+        root.capturedOut = "";
+        root.serviceAction = root.current.kind === "service" ? root.current.action : "";
         root.inflight = true;
         started = false;
         watchdog.restart();
@@ -188,30 +314,94 @@ Singleton {
             return;
         root.inflight = false;
         watchdog.stop();
-        var action = root.current.length > 0 ? root.current[0] : "";
+        var kind = root.current.kind;
+        var action = root.current.action;
         root.pending = root.pending.slice(1);
-        if (reason === "") {
+        root.serviceAction = "";
+
+        if (kind === "service")
+            root.settleService(action, reason);
+        else if (reason === "") {
             root.failedAction = "";
             root.failureReason = "";
         } else {
             root.failedAction = action;
             root.failureReason = reason;
         }
+
         // Read back immediately rather than waiting for the poll: the panel
         // must show what the engine accepted, not what was asked for.
         root.readConfig();
         Qt.callLater(root.pump);
     }
 
+    function settleService(action, reason) {
+        // The engine prints its result object on both paths -- a failed
+        // install still reports what state it left behind, and that is the
+        // state the panel must show -- so the output is parsed whatever the
+        // exit code was. An unparseable payload becomes "unknown", never a
+        // half-filled object.
+        var parsed = Model.parseServiceStatus(root.capturedOut);
+        var known = parsed.state !== Model.SERVICE_UNKNOWN;
+        if (known || reason === "")
+            root.serviceStatus = parsed;
+        root.serviceProbed = true;
+        root.serviceRolledBack = parsed.rolledBack;
+        root.serviceRollbackFailed = parsed.rollbackFailed;
+
+        var failed = reason !== "" || (known && !parsed.ok);
+        if (!failed) {
+            root.serviceFailedAction = "";
+            root.serviceFailureReason = "";
+        } else {
+            root.serviceFailedAction = action;
+            // The engine's own sentence when it produced one; it names the
+            // systemd step that refused. Otherwise whatever the process
+            // boundary gave us.
+            root.serviceFailureReason = parsed.message.length > 0 ? parsed.message : reason;
+        }
+
+        // A service that is still starting has not finished answering. Ask
+        // again, a bounded number of times -- this is a settling delay, not a
+        // poll, and a permanently starting unit must not become one.
+        if (root.serviceStatus.state === "starting" && root.startingProbes < 3) {
+            root.startingProbes += 1;
+            settleProbe.restart();
+        } else if (root.serviceStatus.state !== "starting") {
+            root.startingProbes = 0;
+        }
+    }
+
+    property int startingProbes: 0
+
+    Timer {
+        id: settleProbe
+        interval: 3000
+        repeat: false
+        onTriggered: root.refreshServiceStatus()
+    }
+
     Process {
         id: engine
-        command: [root.enginePath, "config"].concat(root.current)
+        // The program is the engine beside this file and nothing else; the rest
+        // of the list is the argv the queue entry was built with, which is
+        // always one of the fixed lists above.
+        command: [root.enginePath].concat(root.current.argv)
         // The engine prints "writing-critter: <problem>" here and exits 2, so a
         // rejected value arrives as a sentence rather than a number.
         stderr: SplitParser {
             onRead: function (line) {
                 root.capturedError = root.capturedError.length > 0
                     ? root.capturedError + " " + line : line;
+            }
+        }
+        // Only the service commands print anything a caller reads, and they
+        // print one line of JSON. Bounded so a wedged engine cannot grow this
+        // string inside the shell process.
+        stdout: SplitParser {
+            onRead: function (line) {
+                if (root.capturedOut.length < Model.SERVICE_RAW_MAX)
+                    root.capturedOut += line;
             }
         }
         onStarted: root.started = true
@@ -233,11 +423,15 @@ Singleton {
 
     Timer {
         id: watchdog
-        interval: 10000
+        // A config action rewrites a few hundred bytes and has ten seconds. A
+        // service action can make four systemd calls, each with its own eight
+        // second timeout inside the engine, so ten seconds here would fire on a
+        // slow-but-working install and report a timeout for something that then
+        // succeeded. This is the outer bound on the engine's own bounds.
+        interval: root.current.kind === "service" ? 45000 : 10000
         onTriggered: {
-            // Nothing should take ten seconds; the engine's slowest config
-            // action rewrites a few hundred bytes. Reaching here means the
-            // process hung or never launched, and the queue must not wedge.
+            // Reaching here means the process hung or never launched, and the
+            // queue must not wedge.
             if (!root.started) {
                 root.available = false;
                 root.pending = [];

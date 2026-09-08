@@ -55,7 +55,12 @@ def command_program(line: str, source: str) -> tuple[str | None, str]:
     body = line.split(":", 1)[1].strip()
     if not body.startswith("["):
         return None, "not an argument list"
-    first = body[1:].split(",", 1)[0].strip()
+    # Up to the first comma OR the closing bracket. A one-element literal list
+    # that is then concatenated -- `[enginePath].concat(argv)`, which is what a
+    # command whose arguments come from a queue looks like -- has no comma in
+    # it, and splitting on the comma alone swallowed the whole expression and
+    # reported it as unreadable.
+    first = re.split(r"[,\]]", body[1:], maxsplit=1)[0].strip()
 
     literal = re.match(r"""^["'](.+?)["']$""", first)
     if literal:

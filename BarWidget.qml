@@ -63,8 +63,15 @@ BarWidget {
         if (restingReason.length > 0) {
             // Resting: say what is wrong and how to fix it, rather than
             // showing 0/500 as though nothing had been written today.
+            //
+            // This used to suggest `systemctl --user start writing-critter`,
+            // which is advice that cannot work in the most common case it was
+            // shown for: Omarchy runs no install hook, so on a fresh install
+            // there is no unit to start. Point at the panel instead, which
+            // asks the engine what is actually wrong and offers the action
+            // that matches the answer.
             lines.push("Writing Critter — " + restingReason);
-            lines.push("start it with:  systemctl --user start writing-critter");
+            lines.push("open Writing Critter to set up or repair the engine");
             return lines.join("\n");
         }
         lines.push("Writing Critter — " + counter + " (" + Math.round(progressPercent) + "%)");

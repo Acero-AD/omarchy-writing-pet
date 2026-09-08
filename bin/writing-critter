@@ -20,6 +20,7 @@ import os
 import re
 import select
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -918,6 +919,655 @@ def _config_mutate(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+# ------------------------------------------------------- service management
+#
+# Omarchy clones a plugin and validates it; it deliberately runs no install
+# hook. So adding this plugin gives you a bar widget with nothing behind it
+# until the engine is copied out and its user service started. That step used
+# to live only in install.sh, which meant discovering a terminal command that
+# is not mentioned anywhere in the panel.
+#
+# It lives here rather than in the shell for the same reason the counting does.
+# The panel asks for "install"; it does not get to say what to install or where
+# to put it. Every path below is derived from this file's own location and the
+# user's home, the systemd calls are literal argument lists built in this file,
+# and there is no argument, config key, or environment variable that redirects
+# any of them. What the panel can do is exactly what install.sh can do, because
+# they are the same code -- that is the point of putting it here.
+#
+# Nothing in this section reads or writes config.json, state.json or
+# tracking.json, with one exception: status reads state.json's timestamp to
+# tell a service that is running from one that is merely loaded. Removing the
+# engine removes the engine, not your writing history.
+
+UNIT_NAME = "writing-critter.service"
+
+# Bump only for an incompatible change to the status object. Model.js checks
+# this and falls back to "unknown" rather than guessing at a shape it does not
+# know; see parseServiceStatus there.
+SERVICE_SCHEMA = 1
+
+# The stable state vocabulary. The panel maps each of these to exactly one
+# offered action, so adding a state here is a UI change too.
+SERVICE_STATES = (
+    "not-installed",    # one or both files absent -- offer setup
+    "update-available", # installed files differ from this checkout
+    "stopped",          # installed and current, not running
+    "starting",         # active, but has not published state yet
+    "unhealthy",        # active or failed, and not publishing
+    "ready",            # active and publishing
+)
+
+# No systemctl call here does real work -- they reload units, flip symlinks and
+# start one small process -- so a call still running after this long has hung on
+# a busy or wedged user manager, and waiting longer only makes the panel look
+# frozen.
+SYSTEMCTL_TIMEOUT = 8
+
+# The window StateSource.qml uses before it calls the engine stopped. Kept in
+# step deliberately: if the bar says asleep, status must not say ready.
+STATE_FRESH_SECONDS = 90
+
+# A freshly started engine publishes within a second, but a loaded machine can
+# take longer, and calling that "unhealthy" would offer a restart to something
+# that is merely young. Applies only to a unit systemd reports as active.
+STARTUP_GRACE_SECONDS = 20
+
+# Captured output is bounded before it is parsed or reported. systemd is not
+# expected to answer with a megabyte, which is exactly why nothing here assumes
+# it will not.
+SERVICE_OUTPUT_MAX = 8192
+SERVICE_MESSAGE_MAX = 400
+
+ENGINE_MODE = 0o755
+UNIT_MODE = 0o644
+
+# The installed engine's version, read out of the file rather than obtained by
+# running it. Executing a binary to ask what it is means executing a binary you
+# have already decided you are not sure about.
+_VERSION_DECL = re.compile(r'^VERSION\s*=\s*"([0-9A-Za-z.+-]{1,32})"', re.M)
+_VERSION_SCAN_BYTES = 8192
+
+
+def _sanitize(text: str, limit: int = SERVICE_MESSAGE_MAX) -> str:
+    """One line, printable, bounded. Everything here can end up in a bar panel."""
+    cleaned = "".join(ch if ch.isprintable() else " " for ch in text)
+    return " ".join(cleaned.split())[:limit]
+
+
+@dataclass(frozen=True)
+class ServicePaths:
+    """Where the engine comes from and where it goes. Fixed, derived, unsettable.
+
+    `engine` is $HOME/.local/bin deliberately, and not XDG_BIN_HOME as install.sh
+    once used. The shipped unit runs %h/.local/bin/writing-critter -- a literal
+    in a file this program also installs -- so honouring XDG_BIN_HOME put the
+    binary somewhere the unit would never execute and reported success. One
+    canonical location, named in one place, is the fix.
+    """
+
+    source_engine: Path
+    source_unit: Path
+    engine: Path
+    unit: Path
+    state: Path
+
+    @classmethod
+    def resolve(cls) -> "ServicePaths":
+        here = Path(__file__).resolve()
+        return cls(
+            source_engine=here,
+            source_unit=here.parent.parent / "contrib" / UNIT_NAME,
+            engine=Path.home() / ".local" / "bin" / "writing-critter",
+            unit=_xdg("XDG_CONFIG_HOME", ".config") / "systemd" / "user" / UNIT_NAME,
+            state=STATE_PATH,
+        )
+
+    @property
+    def source_available(self) -> bool:
+        """True when this copy is the one in a plugin checkout.
+
+        The copy under ~/.local/bin has no contrib/ beside it. It can report
+        status and drive the service, but it cannot install: it has nothing to
+        install from, and it must not be allowed to reinstall itself and call
+        that an update.
+        """
+        return self.source_engine.is_file() and self.source_unit.is_file()
+
+
+class Systemctl:
+    """Every systemd call this program can make, written out one per method.
+
+    There is no run(verb) taking a string, and no method takes a unit name: the
+    unit is UNIT_NAME and the manager is --user, both literals in this file.
+    A reviewer can read this class and enumerate the complete set of things
+    this plugin can ask systemd to do, which is the only reason it is shaped
+    this way rather than as one generic helper.
+    """
+
+    def __init__(self, timeout: float = SYSTEMCTL_TIMEOUT) -> None:
+        self.timeout = timeout
+
+    SHOW_PROPERTIES = (
+        "LoadState",
+        "ActiveState",
+        "SubState",
+        "UnitFileState",
+        "ActiveEnterTimestampMonotonic",
+        "Result",
+    )
+
+    def _call(self, args: list[str]) -> tuple[bool, str, str]:
+        """(ok, stdout, message). Never raises; a broken systemd is a state."""
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", *args],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+        except FileNotFoundError:
+            return False, "", "systemctl was not found"
+        except subprocess.TimeoutExpired:
+            return False, "", f"systemctl {args[0]} timed out after {self.timeout:g}s"
+        except OSError as exc:
+            return False, "", _sanitize(f"could not run systemctl: {exc}")
+        out = proc.stdout[:SERVICE_OUTPUT_MAX]
+        if proc.returncode == 0:
+            return True, out, ""
+        detail = _sanitize(proc.stderr) or _sanitize(out) or f"exited {proc.returncode}"
+        return False, out, f"systemctl {args[0]}: {detail}"
+
+    # `show` is the only reader, and it is the only one whose exit code carries
+    # no information: it returns 0 for a unit that does not exist, which is
+    # exactly why the parser can tell absent from unaskable. See
+    # tests/fixtures_systemctl.py for the captured evidence.
+    def show(self) -> tuple[bool, str, str]:
+        args = ["show", UNIT_NAME]
+        args += [f"--property={name}" for name in self.SHOW_PROPERTIES]
+        return self._call(args)
+
+    def daemon_reload(self) -> tuple[bool, str, str]:
+        return self._call(["daemon-reload"])
+
+    def enable(self) -> tuple[bool, str, str]:
+        return self._call(["enable", UNIT_NAME])
+
+    def disable(self) -> tuple[bool, str, str]:
+        return self._call(["disable", UNIT_NAME])
+
+    def start(self) -> tuple[bool, str, str]:
+        return self._call(["start", UNIT_NAME])
+
+    def stop(self) -> tuple[bool, str, str]:
+        return self._call(["stop", UNIT_NAME])
+
+    # restart, not `start`, everywhere an installed engine is replaced. `start`
+    # does nothing to a unit that is already running, so an update would swap
+    # the file on disk and leave the old process serving -- the failure
+    # install.sh already carried a comment about.
+    def restart(self) -> tuple[bool, str, str]:
+        return self._call(["restart", UNIT_NAME])
+
+    def reset_failed(self) -> tuple[bool, str, str]:
+        return self._call(["reset-failed", UNIT_NAME])
+
+
+def parse_show(text: str) -> dict[str, str]:
+    """KEY=VALUE lines into a dict, tolerating everything systemd will not send.
+
+    Blank lines, lines without '=', and empty keys are dropped rather than
+    raising: this parses the output of another program, and the one thing it
+    must never do is take the panel down with it.
+    """
+    props: dict[str, str] = {}
+    for line in text[:SERVICE_OUTPUT_MAX].splitlines():
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            continue
+        props[key] = value.strip()[:SERVICE_MESSAGE_MAX]
+    return props
+
+
+def _read_bytes(path: Path) -> bytes | None:
+    """File contents, or None when it is absent or unreadable. Never raises."""
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _read_version(data: bytes | None) -> str:
+    if not data:
+        return ""
+    try:
+        head = data[:_VERSION_SCAN_BYTES].decode("utf-8", "replace")
+    except Exception:  # pragma: no cover - decode with 'replace' does not raise
+        return ""
+    found = _VERSION_DECL.search(head)
+    return found.group(1) if found else ""
+
+
+def _state_age(path: Path, now: float) -> float | None:
+    """Seconds since the engine last published, or None if it never has."""
+    raw = read_state(path)
+    if not raw or "updatedAt" not in raw:
+        return None
+    try:
+        return now - float(raw["updatedAt"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _started_seconds_ago(props: dict[str, str], now_monotonic: float) -> float | None:
+    """How long the unit has been active, from systemd's monotonic timestamp.
+
+    ActiveEnterTimestampMonotonic is CLOCK_MONOTONIC microseconds -- the same
+    clock time.clock_gettime reads -- so this needs no date parsing and no
+    locale. A failed unit also carries a non-zero value (it did enter active,
+    briefly), so callers must gate this on ActiveState themselves.
+    """
+    raw = props.get("ActiveEnterTimestampMonotonic", "")
+    try:
+        micros = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if micros <= 0:
+        return None
+    return now_monotonic - micros / 1_000_000.0
+
+
+def service_status(paths: ServicePaths | None = None,
+                   systemctl: Systemctl | None = None) -> dict[str, Any]:
+    """What is installed, what is running, and whether they are this release.
+
+    Reads. Never writes, never creates a directory, and never executes the
+    installed engine. Three independent questions, because no one of them is
+    enough on its own: state.json outlives a stopped service, systemd will call
+    a wedged process active, and an installed binary can lag the checkout it
+    was copied from.
+    """
+    paths = paths or ServicePaths.resolve()
+    systemctl = systemctl or Systemctl()
+
+    source_engine = _read_bytes(paths.source_engine)
+    source_unit = _read_bytes(paths.source_unit)
+    installed_engine = _read_bytes(paths.engine)
+    installed_unit = _read_bytes(paths.unit)
+
+    has_source = source_engine is not None and source_unit is not None
+    installed = installed_engine is not None and installed_unit is not None
+
+    # Bytes, not versions. A development build or a changed unit file carries
+    # the same version string as the release it came from, and "the file on
+    # disk is not the file in this checkout" is the question that matters.
+    if not has_source:
+        current = True  # unknowable from here; never claim drift we cannot see
+    else:
+        current = installed and installed_engine == source_engine and installed_unit == source_unit
+
+    ok, out, message = systemctl.show()
+    props = parse_show(out) if ok else {}
+    active = props.get("ActiveState", "unknown") if ok else "unknown"
+    enabled = props.get("UnitFileState", "") in ("enabled", "enabled-runtime")
+
+    now = time.time()
+    age = _state_age(paths.state, now)
+    fresh = age is not None and age < STATE_FRESH_SECONDS
+
+    if not installed:
+        state = "not-installed"
+    elif not current:
+        state = "update-available"
+    elif not ok:
+        # systemd could not be asked. Fall back to the one piece of evidence
+        # that does not need it, and say so in the message rather than
+        # inventing a supervision state.
+        state = "ready" if fresh else "stopped"
+    elif active == "activating":
+        state = "starting"
+    elif active == "failed":
+        # Stopped, and stopped for a reason. Restart is the repair that works
+        # on a unit which hit its start limit, so this is not folded into
+        # "stopped" -- the offered action differs.
+        state = "unhealthy"
+    elif active != "active":
+        state = "stopped"
+    elif fresh:
+        state = "ready"
+    else:
+        started = _started_seconds_ago(props, time.clock_gettime(time.CLOCK_MONOTONIC))
+        state = "starting" if started is not None and started < STARTUP_GRACE_SECONDS else "unhealthy"
+
+    detail = message
+    if not detail and state == "unhealthy" and active == "failed":
+        detail = f"the service failed ({props.get('Result', 'unknown')})"
+    elif not detail and state == "unhealthy":
+        detail = "the service is running but has not published state"
+    elif not detail and not has_source:
+        detail = "installed copy: cannot compare with a plugin checkout from here"
+
+    return {
+        "schema": SERVICE_SCHEMA,
+        "action": "",
+        "ok": True,
+        "changed": False,
+        "rolledBack": False,
+        "rollbackFailed": False,
+        "message": _sanitize(detail),
+        "state": state,
+        "installed": installed,
+        "current": bool(current),
+        "enabled": enabled,
+        "activeState": active,
+        "stateFresh": fresh,
+        "sourceAvailable": has_source,
+        "sourceVersion": VERSION if has_source else "",
+        "installedVersion": _read_version(installed_engine),
+        "enginePath": str(paths.engine),
+        "unitPath": str(paths.unit),
+    }
+
+
+def _result(action: str, ok: bool, status: dict[str, Any], message: str = "",
+            changed: bool = False, rolled_back: bool = False,
+            rollback_failed: bool = False) -> dict[str, Any]:
+    """One shape for every service command, so the panel parses one shape."""
+    out = dict(status)
+    out["action"] = action
+    out["ok"] = ok
+    out["changed"] = changed
+    out["rolledBack"] = rolled_back
+    out["rollbackFailed"] = rollback_failed
+    if message:
+        out["message"] = _sanitize(message)
+    return out
+
+
+@dataclass
+class _Snapshot:
+    """What a target looked like before we touched it. data None means absent."""
+
+    path: Path
+    data: bytes | None
+    mode: int | None
+
+    @classmethod
+    def take(cls, path: Path) -> "_Snapshot":
+        data = _read_bytes(path)
+        mode = None
+        if data is not None:
+            try:
+                mode = stat.S_IMODE(path.stat().st_mode)
+            except OSError:
+                mode = None
+        return cls(path=path, data=data, mode=mode)
+
+    def restore(self, default_mode: int) -> None:
+        if self.data is None:
+            self.path.unlink(missing_ok=True)
+            return
+        _stage(self.path, self.data, self.mode if self.mode is not None else default_mode)
+
+
+def _stage(dest: Path, data: bytes, mode: int) -> None:
+    """Write beside the target, flush it to disk, then rename over it.
+
+    A half-written engine is worse than an old one, and os.replace is the only
+    step here that a reader can observe. The explicit chmod is not redundant:
+    os.open's mode is masked by umask, so a 0o644 unit under a 0o077 umask
+    would land at 0o600 and systemd would not read it.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.new-{os.getpid()}")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, dest)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
+def _rollback(snapshots: list[tuple[_Snapshot, int]], systemctl: Systemctl,
+              was_active: bool, had_unit: bool) -> tuple[bool, str]:
+    """Put back what was there. Returns (rolled_back, why_it_could_not_be).
+
+    Order matters in one direction only: when the unit file is about to be
+    removed, `disable` has to run first or its symlinks are left dangling.
+    """
+    problems: list[str] = []
+    if not had_unit:
+        for call in (systemctl.stop, systemctl.disable):
+            ok, _, message = call()
+            if not ok:
+                problems.append(message)
+    try:
+        for snapshot, default_mode in snapshots:
+            snapshot.restore(default_mode)
+    except OSError as exc:
+        return False, _sanitize(f"could not restore {exc}")
+
+    ok, _, message = systemctl.daemon_reload()
+    if not ok:
+        problems.append(message)
+
+    if had_unit:
+        restore_call = systemctl.restart if was_active else systemctl.stop
+        ok, _, message = restore_call()
+        if not ok:
+            problems.append(message)
+    if not was_active:
+        systemctl.reset_failed()
+
+    # The files are back either way; the notes above are about the service,
+    # and a caller that reports them has told the truth about both.
+    return True, _sanitize("; ".join(p for p in problems if p))
+
+
+def service_install(paths: ServicePaths | None = None,
+                    systemctl: Systemctl | None = None) -> dict[str, Any]:
+    """Install or update the engine and its user service, or change nothing.
+
+    Idempotent: identical files are not rewritten, but enablement and the
+    running state are still verified, because "the right bytes are on disk" is
+    not the same claim as "the engine is running".
+    """
+    paths = paths or ServicePaths.resolve()
+    systemctl = systemctl or Systemctl()
+
+    if not paths.source_available:
+        status = service_status(paths, systemctl)
+        return _result("install", False, status,
+                       message="run this from the plugin checkout: "
+                               f"{paths.source_unit} is not there to install")
+
+    source_engine = _read_bytes(paths.source_engine)
+    source_unit = _read_bytes(paths.source_unit)
+    if source_engine is None or source_unit is None:
+        status = service_status(paths, systemctl)
+        return _result("install", False, status,
+                       message="could not read the files to install")
+
+    before = service_status(paths, systemctl)
+    was_active = before["activeState"] == "active"
+    had_unit = paths.unit.exists()
+
+    snapshots = [(_Snapshot.take(paths.engine), ENGINE_MODE),
+                 (_Snapshot.take(paths.unit), UNIT_MODE)]
+    changed = (snapshots[0][0].data != source_engine
+               or snapshots[1][0].data != source_unit)
+
+    if changed:
+        try:
+            _stage(paths.engine, source_engine, ENGINE_MODE)
+            _stage(paths.unit, source_unit, UNIT_MODE)
+        except OSError as exc:
+            rolled, why = _rollback(snapshots, systemctl, was_active, had_unit)
+            status = service_status(paths, systemctl)
+            return _result("install", False, status,
+                           message=_sanitize(f"could not write the files: {exc}"),
+                           rolled_back=rolled, rollback_failed=not rolled or bool(why))
+
+    for call in (systemctl.daemon_reload, systemctl.enable, systemctl.restart):
+        ok, _, message = call()
+        if ok:
+            continue
+        rolled, why = _rollback(snapshots, systemctl, was_active, had_unit)
+        status = service_status(paths, systemctl)
+        return _result("install", False, status, message=message,
+                       rolled_back=rolled, rollback_failed=not rolled or bool(why))
+
+    # Verify against systemd's own answer, not against the exit code of the
+    # restart: a Type=simple unit whose program dies immediately reports a
+    # successful start. Measured; see tests/fixtures_systemctl.py.
+    status = service_status(paths, systemctl)
+    if status["activeState"] not in ("active", "activating"):
+        rolled, why = _rollback(snapshots, systemctl, was_active, had_unit)
+        after = service_status(paths, systemctl)
+        return _result("install", False, after,
+                       message=f"the service did not start ({status['activeState']})",
+                       rolled_back=rolled, rollback_failed=not rolled or bool(why))
+
+    return _result("install", True, status, changed=changed,
+                   message="" if changed else "already up to date")
+
+
+def _lifecycle(action: str, paths: ServicePaths, systemctl: Systemctl,
+               call) -> dict[str, Any]:
+    """start and restart: same shape, same verification, one verb apart."""
+    status = service_status(paths, systemctl)
+    if not status["installed"]:
+        return _result(action, False, status,
+                       message="the engine is not installed yet")
+
+    ok, _, message = call()
+    if not ok:
+        return _result(action, False, service_status(paths, systemctl), message=message)
+
+    after = service_status(paths, systemctl)
+    if after["activeState"] not in ("active", "activating"):
+        return _result(action, False, after,
+                       message=f"the service did not start ({after['activeState']})")
+    return _result(action, True, after, changed=True)
+
+
+def service_start(paths: ServicePaths | None = None,
+                  systemctl: Systemctl | None = None) -> dict[str, Any]:
+    paths = paths or ServicePaths.resolve()
+    systemctl = systemctl or Systemctl()
+    return _lifecycle("start", paths, systemctl, systemctl.start)
+
+
+def service_restart(paths: ServicePaths | None = None,
+                    systemctl: Systemctl | None = None) -> dict[str, Any]:
+    paths = paths or ServicePaths.resolve()
+    systemctl = systemctl or Systemctl()
+    return _lifecycle("restart", paths, systemctl, systemctl.restart)
+
+
+def service_uninstall(paths: ServicePaths | None = None,
+                      systemctl: Systemctl | None = None) -> dict[str, Any]:
+    """Remove the engine and its unit. Keep every word you have written.
+
+    Configuration, today's count, per-file baselines and history all survive,
+    so reinstalling resumes rather than restarts. A cleanup action in a bar
+    panel must not be a data-loss action, and the confirmation says as much.
+    """
+    paths = paths or ServicePaths.resolve()
+    systemctl = systemctl or Systemctl()
+
+    had_unit = paths.unit.exists()
+    had_engine = paths.engine.exists()
+    if not had_unit and not had_engine:
+        return _result("uninstall", True, service_status(paths, systemctl),
+                       message="nothing was installed")
+
+    # Only when the unit is actually there. Asking systemd to stop a unit it
+    # has never heard of is a failure it will report, and reporting it would
+    # make a second uninstall look broken.
+    if had_unit:
+        for call in (systemctl.stop, systemctl.disable):
+            ok, _, message = call()
+            if not ok:
+                # Do not delete a unit file we could not stop: that would
+                # leave the process running with nothing left to stop it with.
+                return _result("uninstall", False, service_status(paths, systemctl),
+                               message=message)
+
+    removed = []
+    try:
+        for target in (paths.engine, paths.unit):
+            if target.exists():
+                target.unlink()
+                removed.append(target)
+    except OSError as exc:
+        return _result("uninstall", False, service_status(paths, systemctl),
+                       message=_sanitize(f"could not remove {exc}"))
+
+    problems = []
+    for call in (systemctl.daemon_reload, systemctl.reset_failed):
+        ok, _, message = call()
+        if not ok and call is systemctl.daemon_reload:
+            problems.append(message)
+
+    status = service_status(paths, systemctl)
+    return _result("uninstall", True, status, changed=bool(removed),
+                   message="; ".join(problems))
+
+
+SERVICE_ACTIONS = {
+    "status": service_status,
+    "install": service_install,
+    "start": service_start,
+    "restart": service_restart,
+    "uninstall": service_uninstall,
+}
+
+
+def render_service(result: dict[str, Any]) -> str:
+    """The terminal rendering. install.sh and uninstall.sh print this."""
+    lines = []
+    action = result["action"] or "status"
+    if result["action"]:
+        lines.append(f"{action}: " + ("ok" if result["ok"] else "FAILED"))
+    lines.append(f"state         {result['state']}")
+    lines.append(f"engine        {result['enginePath']}"
+                 + ("" if result["installed"] else "  (not installed)"))
+    lines.append(f"unit          {result['unitPath']}")
+    if result["installedVersion"] or result["sourceVersion"]:
+        lines.append(f"version       installed {result['installedVersion'] or '-'}"
+                     f", this checkout {result['sourceVersion'] or '-'}")
+    lines.append(f"service       {result['activeState']}"
+                 + (", enabled" if result["enabled"] else ", not enabled"))
+    if result["rolledBack"]:
+        lines.append("rolled back   the previous installation was restored"
+                     + (" (with problems, see below)" if result["rollbackFailed"] else ""))
+    if result["message"]:
+        lines.append(f"note          {result['message']}")
+    return "\n".join(lines)
+
+
+def cmd_service(args: argparse.Namespace) -> int:
+    result = SERVICE_ACTIONS[args.service_action]()
+    if args.json:
+        # One line, sorted keys: the panel reads this, and a stable byte order
+        # makes a diff of two probes readable to a human as well.
+        print(json.dumps(result, sort_keys=True))
+    else:
+        print(render_service(result))
+    # A probe that answered is a success even when the answer is "not
+    # installed"; the state field carries that. An action that failed is not.
+    return 0 if result["ok"] else 1
+
+
 # ----------------------------------------------------------------- cli
 
 
@@ -929,6 +1579,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("run", help="run in the foreground, logging every decision")
     sub.add_parser("status", help="print today's count and why counting is or is not happening")
+
+    svc = sub.add_parser("service", help="install, inspect and remove the user service")
+    svcsub = svc.add_subparsers(dest="service_action", required=True)
+    # No action takes an argument. The source is this checkout and the
+    # destinations are fixed; there is deliberately nothing to pass. --json is
+    # declared per action rather than on the group so that it can be written
+    # last, where a reader of `service install --json` expects it.
+    for action, blurb in (
+        ("status", "report what is installed and whether it is running"),
+        ("install", "install or update the engine and start its user service"),
+        ("start", "start the installed user service"),
+        ("restart", "restart the installed user service"),
+        ("uninstall", "remove the engine and unit, keeping all writing data"),
+    ):
+        sp = svcsub.add_parser(action, help=blurb)
+        sp.add_argument("--json", action="store_true",
+                        help=f"print the machine-readable result object (schema {SERVICE_SCHEMA})")
 
     cfg = sub.add_parser("config", help="inspect and change settings")
     cfgsub = cfg.add_subparsers(dest="config_action", required=True)
@@ -945,7 +1612,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    handler = {"run": cmd_run, "status": cmd_status, "config": cmd_config}[args.command]
+    handler = {"run": cmd_run, "status": cmd_status, "config": cmd_config,
+               "service": cmd_service}[args.command]
     try:
         return handler(args)
     except ConfigError as exc:
