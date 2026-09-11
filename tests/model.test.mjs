@@ -568,8 +568,8 @@ test("serviceConfirmTitle and label distinguish setup from update", () => {
   const there = M.parseServiceStatus(okStatus({ installed: true }));
   assert.equal(M.serviceConfirmTitle("install", fresh), "Set up the engine?");
   assert.equal(M.serviceConfirmTitle("install", there), "Update the engine?");
-  assert.equal(M.serviceConfirmLabel("install", fresh), "Install and start");
-  assert.equal(M.serviceConfirmLabel("install", there), "Update and restart");
+  assert.equal(M.serviceConfirmLabel("install", fresh), "Install");
+  assert.equal(M.serviceConfirmLabel("install", there), "Update");
   assert.equal(M.serviceConfirmTitle("uninstall", there), "Remove the engine?");
   assert.equal(M.serviceConfirmTitle("start", there), "");
 });
@@ -826,4 +826,338 @@ test("the re-probe after a start is bounded", () => {
   assert.ok(M.STARTING_REPROBE_MAX > 0);
   assert.ok(M.STARTING_REPROBE_MAX <= 5,
     "a unit stuck in 'starting' would turn a settling delay into a poll");
+});
+
+// ------------------------------------------------------------- THE OUTCOME
+//
+// Before this, a successful install made the setup card vanish: every term of
+// its `visible` binding went false at once, so the one case with no feedback
+// was the one that worked. These pin down what is said afterwards, when it is
+// kept, and what is allowed to clear it.
+
+const ENGINE = "/plugins/wc/bin/writing-critter";
+
+const result = (action, over = {}) => JSON.stringify(Object.assign({
+  schema: 1, action, ok: true, changed: true,
+  rolledBack: false, rollbackFailed: false, message: "",
+  state: "ready", installed: true, current: true, enabled: true,
+  activeState: "active", stateFresh: true, sourceAvailable: true,
+  sourceVersion: "0.1.0", installedVersion: "0.1.0",
+  enginePath: "/home/u/.local/bin/writing-critter",
+  unitPath: "/home/u/.config/systemd/user/writing-critter.service"
+}, over));
+
+const settled = (action, over = {}, reason = "") =>
+  M.serviceSettlement(action, reason, result(action, over), null);
+
+const before = (over = {}) => M.parseServiceStatus(result("status", over));
+
+test("serviceOutcome: every lifecycle action has its own success sentence", () => {
+  const seen = new Set();
+  const cases = [
+    ["install", before({ installed: false })],
+    ["start", before()], ["restart", before()], ["uninstall", before()]
+  ];
+  for (const [action, prev] of cases) {
+    const out = M.serviceOutcome(action, settled(action), prev, ENGINE);
+    assert.equal(out.ok, true, action);
+    assert.ok(out.headline.length > 0, action);
+    assert.notEqual(out.headline.toLowerCase(), "done", `${action} said nothing specific`);
+    seen.add(out.headline);
+  }
+  assert.equal(seen.size, cases.length, "two different actions reported the same sentence");
+});
+
+test("serviceOutcome: a first setup and an update are told apart", () => {
+  // Both are the "install" action; only the state before it differs.
+  const fresh = M.serviceOutcome("install", settled("install"), before({ installed: false }), ENGINE);
+  const update = M.serviceOutcome("install", settled("install"), before({ installed: true }), ENGINE);
+  assert.match(fresh.headline, /installed and running/);
+  assert.match(update.headline, /updated and restarted/);
+});
+
+test("serviceOutcome: an install that changed nothing does not claim an update", () => {
+  const out = M.serviceOutcome("install", settled("install", { changed: false }),
+                               before({ installed: true }), ENGINE);
+  assert.match(out.headline, /already up to date/);
+});
+
+test("serviceOutcome: removal says what went and what stayed", () => {
+  const out = M.serviceOutcome("uninstall", settled("uninstall", { installed: false, state: "not-installed" }),
+                               before(), ENGINE);
+  assert.match(out.headline, /removed/);
+  assert.match(out.detail, /program and user service are gone/);
+  assert.match(out.detail, /settings, today's count and your history were kept/);
+});
+
+test("serviceOutcome: removing nothing is not reported as a removal", () => {
+  const out = M.serviceOutcome("uninstall", settled("uninstall", { changed: false }),
+                               before({ installed: false }), ENGINE);
+  assert.match(out.headline, /no engine to remove/);
+});
+
+test("serviceOutcome: a failure names what did not happen and why", () => {
+  const out = M.serviceOutcome("install",
+    settled("install", { ok: false, message: "systemctl enable: refused" }, "exited 1"),
+    before({ installed: false }), ENGINE);
+  assert.equal(out.ok, false);
+  assert.equal(out.headline, "Setup did not finish.");
+  assert.equal(out.detail, "systemctl enable: refused",
+    "the engine's own sentence was replaced by the exit code");
+});
+
+test("serviceOutcome: a failed update is not called a failed setup", () => {
+  const out = M.serviceOutcome("install", settled("install", { ok: false }, "exited 1"),
+                               before({ installed: true }), ENGINE);
+  assert.equal(out.headline, "The update did not finish.");
+});
+
+test("serviceOutcome: every failure carries the command to run by hand", () => {
+  for (const action of ["install", "start", "restart", "uninstall"]) {
+    const out = M.serviceOutcome(action, settled(action, { ok: false }, "exited 1"), before(), ENGINE);
+    assert.equal(out.command, `${ENGINE} service ${action}`, action);
+  }
+});
+
+test("serviceOutcome: a success carries no command, because there is nothing to retry", () => {
+  const out = M.serviceOutcome("start", settled("start"), before(), ENGINE);
+  assert.equal(out.command, "");
+});
+
+test("serviceOutcome: the rollback is described in terms of what was there before", () => {
+  const firstSetup = M.serviceOutcome("install",
+    settled("install", { ok: false, rolledBack: true }, "exited 1"), before({ installed: false }), ENGINE);
+  assert.match(firstSetup.rollback, /Nothing was left installed/);
+  assert.doesNotMatch(firstSetup.rollback, /previous engine/,
+    "a first setup has no previous engine to put back");
+
+  const update = M.serviceOutcome("install",
+    settled("install", { ok: false, rolledBack: true }, "exited 1"), before({ installed: true }), ENGINE);
+  assert.match(update.rollback, /previous engine was put back/);
+});
+
+test("serviceOutcome: a rollback that could not restore the service says so", () => {
+  const out = M.serviceOutcome("install",
+    settled("install", { ok: false, rolledBack: true, rollbackFailed: true }, "exited 1"),
+    before({ installed: true }), ENGINE);
+  assert.match(out.rollback, /could not be restored/);
+});
+
+test("serviceOutcome: a status probe produces no outcome at all", () => {
+  assert.equal(M.serviceOutcome("status", settled("status"), before(), ENGINE), null);
+  assert.equal(M.serviceOutcome("status", settled("status", { ok: false }, "timed out"), before(), ENGINE), null);
+});
+
+test("serviceOutcome: an action outside the vocabulary produces nothing", () => {
+  for (const action of ["purge", "", null, undefined])
+    assert.equal(M.serviceOutcome(action, settled("install"), before(), ENGINE), null);
+});
+
+// -------------------------------------------------------- what may clear it
+
+test("nextServiceOutcome: nothing has happened yet, so there is nothing to say", () => {
+  assert.equal(M.nextServiceOutcome(null, "status", settled("status"), null, ENGINE), null);
+  assert.equal(M.nextServiceOutcome(undefined, "status", settled("status"), null, ENGINE), null);
+});
+
+test("nextServiceOutcome: a status probe keeps a success on screen", () => {
+  const shown = M.serviceOutcome("install", settled("install"), before({ installed: false }), ENGINE);
+  const after = M.nextServiceOutcome(shown, "status", settled("status"), before(), ENGINE);
+  assert.equal(after, shown, "the probe that follows an action erased its confirmation");
+});
+
+test("nextServiceOutcome: a failing status probe keeps it on screen too", () => {
+  const shown = M.serviceOutcome("start", settled("start"), before(), ENGINE);
+  const after = M.nextServiceOutcome(shown, "status", settled("status", {}, "timed out"), before(), ENGINE);
+  assert.equal(after, shown);
+});
+
+test("nextServiceOutcome: a probe cannot clear a failure either", () => {
+  // Previously a successful probe reset serviceFailedAction, so a real
+  // failure silently disappeared the next time the panel opened.
+  const failure = M.serviceOutcome("install", settled("install", { ok: false }, "exited 1"),
+                                   before({ installed: false }), ENGINE);
+  const after = M.nextServiceOutcome(failure, "status", settled("status"), before(), ENGINE);
+  assert.equal(after, failure);
+});
+
+test("nextServiceOutcome: the next action replaces the last one", () => {
+  const first = M.serviceOutcome("install", settled("install", { ok: false }, "exited 1"),
+                                 before({ installed: false }), ENGINE);
+  const second = M.nextServiceOutcome(first, "install", settled("install"),
+                                      before({ installed: false }), ENGINE);
+  assert.equal(second.ok, true, "a retry that worked still showed the old failure");
+});
+
+test("nextProbeError: only a failed probe sets it, and anything else clears it", () => {
+  assert.equal(M.nextProbeError("status", settled("status", {}, "timed out")), "timed out");
+  assert.equal(M.nextProbeError("status", settled("status")), "");
+  assert.equal(M.nextProbeError("start", settled("start", { ok: false }, "exited 1")), "",
+    "a lifecycle failure is an outcome, not a probe error");
+});
+
+test("serviceRefused: an invented action is reported, not silently dropped", () => {
+  const out = M.serviceRefused("purge");
+  assert.equal(out.ok, false);
+  assert.match(out.detail, /purge is not an allowed action/);
+  assert.equal(out.command, "", "a refused action must not be offered as a command to run");
+});
+
+// ------------------------------------------------------ whether it is seen
+
+test("serviceCardVisible: a success keeps the card up", () => {
+  const outcome = M.serviceOutcome("install", settled("install"), before({ installed: false }), ENGINE);
+  assert.equal(M.serviceCardVisible({ probed: true, state: "ready", busy: false, outcome }), true,
+    "the card vanished at the moment it should have said that worked");
+});
+
+test("serviceCardVisible: once dismissed, a ready engine hides it again", () => {
+  assert.equal(M.serviceCardVisible({ probed: true, state: "ready", busy: false, outcome: null }), false);
+});
+
+test("serviceCardVisible: it still appears for every state that needs setup", () => {
+  for (const state of ["not-installed", "update-available", "stopped", "starting", "unhealthy", M.SERVICE_UNKNOWN])
+    assert.equal(M.serviceCardVisible({ probed: true, state, busy: false, outcome: null }), true, state);
+});
+
+test("serviceCardVisible: not before the first probe has answered", () => {
+  // Otherwise a fresh panel would offer setup for a moment before learning
+  // the engine was already installed.
+  assert.equal(M.serviceCardVisible({ probed: false, state: M.SERVICE_UNKNOWN, busy: false, outcome: null }), false);
+});
+
+test("serviceCardVisible: an action in flight is always shown", () => {
+  assert.equal(M.serviceCardVisible({ probed: true, state: "ready", busy: true, outcome: null }), true);
+});
+
+test("serviceCardVisible: a probe that could not reach the engine is shown", () => {
+  assert.equal(M.serviceCardVisible({ probed: true, state: "ready", busy: false,
+                                      outcome: null, probeError: "timed out" }), true);
+});
+
+test("serviceCardVisible: tolerates a missing view", () => {
+  assert.equal(M.serviceCardVisible(undefined), false);
+  assert.equal(M.serviceCardVisible({}), false);
+});
+
+test("serviceNeedsSetup was not taught that a ready engine needs setup", () => {
+  assert.equal(M.serviceNeedsSetup("ready"), false);
+});
+
+// ------------------------------------------------------------ the dialog
+
+// The dialog inserts zero-width spaces into paths so they can wrap. Anything
+// comparing words has to look through them, exactly as a reader does.
+const unwrapped = (text) => text.split(M.ZERO_WIDTH_SPACE).join("");
+
+test("serviceDisclosureMessage: the same lines, in the same words and order", () => {
+  for (const installed of [false, true]) {
+    const status = before({ installed });
+    const lines = M.serviceDisclosure("install", status);
+    const message = unwrapped(M.serviceDisclosureMessage("install", status));
+    let from = 0;
+    for (const line of lines) {
+      const at = message.indexOf(line, from);
+      assert.ok(at >= 0, `the dialog dropped or reworded: ${line}`);
+      from = at + line.length;
+    }
+  }
+});
+
+test("serviceDisclosureMessage: opens with the question being asked", () => {
+  assert.match(M.serviceDisclosureMessage("install", before({ installed: false })), /^Set up the engine\?/);
+  assert.match(M.serviceDisclosureMessage("install", before({ installed: true })), /^Update the engine\?/);
+  assert.match(M.serviceDisclosureMessage("uninstall", before()), /^Remove the engine\?/);
+});
+
+test("serviceDisclosureMessage: names both real destinations", () => {
+  const message = unwrapped(M.serviceDisclosureMessage("install", before({ installed: false })));
+  assert.match(message, /\/home\/u\/\.local\/bin\/writing-critter/);
+  assert.match(message, /\/home\/u\/\.config\/systemd\/user\/writing-critter\.service/);
+});
+
+test("serviceDisclosureMessage: nothing unconfirmed gets a dialog", () => {
+  for (const action of ["start", "restart", "status", "purge", ""])
+    assert.equal(M.serviceDisclosureMessage(action, before()), "");
+});
+
+test("serviceWorking: the probe that runs on every panel open is not work", () => {
+  // Counting it made a healthy engine's card flash "checking" on each open.
+  assert.equal(M.serviceWorking("status"), false);
+  for (const action of ["install", "start", "restart", "uninstall"])
+    assert.equal(M.serviceWorking(action), true, action);
+  for (const idle of ["", null, undefined])
+    assert.equal(M.serviceWorking(idle), false);
+});
+
+test("serviceCardVisible: opening the panel on a healthy engine shows nothing", () => {
+  // What Control reports during the probe that opening the panel triggers.
+  const busy = M.serviceWorking("status");
+  assert.equal(M.serviceCardVisible({ probed: true, state: "ready", busy, outcome: null }), false);
+});
+
+// ----------------------------------------------------- fitting the dialog
+//
+// Measured against the shell's real ConfirmDialog, not guessed: buttons are a
+// fixed Style.space(88) wide with no elide, and the message is title-size text
+// with WordWrap in a card min(panel - 32, 370) wide -- about 30 monospace
+// characters a line in this panel. Before these rules the unit path was a
+// 61-character unbreakable token, and the confirm label was 18 characters.
+
+test("serviceConfirmLabel: every label fits a fixed-width button", () => {
+  const labels = [
+    M.serviceConfirmLabel("install", before({ installed: false })),
+    M.serviceConfirmLabel("install", before({ installed: true })),
+    M.serviceConfirmLabel("uninstall", before())
+  ];
+  for (const label of labels) {
+    assert.ok(label.length > 0);
+    assert.ok(label.length <= M.CONFIRM_LABEL_MAX,
+      `"${label}" runs past an 88px button`);
+  }
+});
+
+test("serviceDisclosureMessage: no unbreakable run is wider than a line", () => {
+  // A long real-world home directory, the worst case the review will meet.
+  const home = "/home/a-rather-long-username";
+  const status = before({ installed: false,
+    enginePath: home + "/.local/bin/writing-critter",
+    unitPath: home + "/.config/systemd/user/writing-critter.service" });
+  const message = M.serviceDisclosureMessage("install", status, home);
+  const runs = message.split(/[\s\u200B]+/);
+  const longest = Math.max(...runs.map(r => r.length));
+  assert.ok(longest <= 30, `a ${longest}-character run cannot wrap inside the dialog card`);
+});
+
+test("servicePathForDisplay: a path under home is written with a tilde", () => {
+  const shown = unwrapped(M.servicePathForDisplay("/home/u/.local/bin/writing-critter", "/home/u"));
+  assert.equal(shown, "~/.local/bin/writing-critter");
+});
+
+test("servicePathForDisplay: a custom XDG location is named in full", () => {
+  // The review has to say where the unit will really go.
+  const shown = unwrapped(M.servicePathForDisplay("/srv/cfg/systemd/user/writing-critter.service", "/home/u"));
+  assert.equal(shown, "/srv/cfg/systemd/user/writing-critter.service");
+});
+
+test("servicePathForDisplay: a home that is only a prefix is not abbreviated", () => {
+  // /home/u must not turn /home/ursula/... into ~rsula/...
+  const shown = unwrapped(M.servicePathForDisplay("/home/ursula/.local/bin/writing-critter", "/home/u"));
+  assert.equal(shown, "/home/ursula/.local/bin/writing-critter");
+});
+
+test("servicePathForDisplay: a root home does not abbreviate every path", () => {
+  const shown = unwrapped(M.servicePathForDisplay("/etc/x", "/"));
+  assert.equal(shown, "/etc/x");
+});
+
+test("servicePathForDisplay: every slash is a place the line may break", () => {
+  const shown = M.servicePathForDisplay("/a/b/c", "");
+  assert.equal(shown.split("/").length - 1, shown.split(M.ZERO_WIDTH_SPACE).length - 1);
+});
+
+test("serviceDisclosureMessage: before status answers, the placeholders wrap too", () => {
+  const message = M.serviceDisclosureMessage("install", null, "/home/u");
+  assert.ok(message.includes(M.ZERO_WIDTH_SPACE), "a placeholder path cannot wrap");
+  assert.match(unwrapped(message), /~\/\.config\/systemd\/user\/writing-critter\.service/);
 });

@@ -133,16 +133,32 @@ Singleton {
     // here rather than in the panel so that a second monitor's panel is not
     // left showing a review for something already installed.
     property string pendingConfirm: ""
-    property string serviceFailedAction: ""
-    property string serviceFailureReason: ""
-    property bool serviceRolledBack: false
-    property bool serviceRollbackFailed: false
+
+    // What the last lifecycle action came to, or null. See Model.serviceOutcome.
+    //
+    // This replaced four properties -- the failed action, its reason, and two
+    // rollback flags -- that only ever described a failure. A success had no
+    // representation at all, which is why a successful install made the setup
+    // card vanish instead of saying so. Now success and failure are one record,
+    // shown by one piece of the panel.
+    //
+    // Held here and not in the panel for the same reason as pendingConfirm: one
+    // panel per screen, and they must all report the same thing. There is no
+    // "acknowledged" flag; dismissing it clears it, for every panel at once.
+    property var serviceOutcome: null
+
+    // A status probe that could not reach the engine. Kept apart from the
+    // outcome because a probe is not something the user did, and it must not
+    // replace or clear the report of something they did.
+    property string serviceProbeError: ""
     // True once a status probe has answered, so the panel can tell "not
     // installed" from "not asked yet" and avoid offering setup for a moment
     // before the real answer lands.
     property bool serviceProbed: false
 
-    readonly property bool serviceBusy: root.serviceAction.length > 0
+    // A lifecycle action someone is waiting on -- not the background probe
+    // that runs whenever a panel opens. See Model.serviceWorking.
+    readonly property bool serviceBusy: Model.serviceWorking(root.serviceAction)
 
     // ------------------------------------------------------ command queue
 
@@ -223,8 +239,7 @@ Singleton {
 
     function requestService(action) {
         if (Model.serviceArgv(action) === null) {
-            root.serviceFailedAction = action;
-            root.serviceFailureReason = "not an allowed action";
+            root.serviceOutcome = Model.serviceRefused(action);
             return false;
         }
         if (!root.available)
@@ -250,6 +265,10 @@ Singleton {
 
     function cancelService() {
         root.pendingConfirm = "";
+    }
+
+    function dismissOutcome() {
+        root.serviceOutcome = null;
     }
 
     function startService(action) {
@@ -330,21 +349,23 @@ Singleton {
     }
 
     function settleService(action, reason) {
-        var outcome = Model.serviceSettlement(action, reason, root.capturedOut,
-                                              root.serviceStatus);
-        root.serviceStatus = outcome.status;
+        var settlement = Model.serviceSettlement(action, reason, root.capturedOut,
+                                                 root.serviceStatus);
+        // Before serviceStatus is replaced: the status from before the action
+        // is what tells a first setup from an update, since both are "install".
+        root.serviceOutcome = Model.nextServiceOutcome(root.serviceOutcome, action,
+                                                       settlement, root.serviceStatus,
+                                                       root.enginePath);
+        root.serviceProbeError = Model.nextProbeError(action, settlement);
+        root.serviceStatus = settlement.status;
         root.serviceProbed = true;
-        root.serviceRolledBack = outcome.rolledBack;
-        root.serviceRollbackFailed = outcome.rollbackFailed;
-        root.serviceFailedAction = outcome.failedAction;
-        root.serviceFailureReason = outcome.failureReason;
 
         // Bounded: a settling delay, not a poll. A unit that stays in
         // "starting" forever must not turn this into one.
-        if (outcome.reprobe && root.startingProbes < Model.STARTING_REPROBE_MAX) {
+        if (settlement.reprobe && root.startingProbes < Model.STARTING_REPROBE_MAX) {
             root.startingProbes += 1;
             settleProbe.restart();
-        } else if (!outcome.reprobe) {
+        } else if (!settlement.reprobe) {
             root.startingProbes = 0;
         }
     }

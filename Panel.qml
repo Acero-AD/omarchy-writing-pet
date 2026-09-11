@@ -103,18 +103,24 @@ Panel {
     readonly property var service: Critter.Control.serviceStatus
     readonly property string serviceState: Critter.Control.serviceState
     readonly property var serviceOffer: Model.serviceOffer(root.serviceState)
-    readonly property bool needsSetup: Critter.Control.serviceProbed
-                                       && Model.serviceNeedsSetup(root.serviceState)
     readonly property string confirming: Critter.Control.pendingConfirm
     readonly property bool canRemoveEngine: Model.serviceCanRemove(root.service)
 
-    // The command to run by hand when the panel's own attempt failed. Built
-    // from the shell's own path to the engine beside it, never from anything
-    // the engine printed.
-    readonly property string fallbackCommand: Model.serviceCommand(
-        Critter.Control.enginePath,
-        Critter.Control.serviceFailedAction.length > 0
-            ? Critter.Control.serviceFailedAction : root.serviceOffer.action)
+    // What the last action came to, shared by every panel. Its command, when it
+    // has one, was built by Model from the shell's own path to the engine
+    // beside this file -- never from anything the engine printed.
+    readonly property var outcome: Critter.Control.serviceOutcome
+
+    // Model.serviceCardVisible, not a local chain of terms: it is what stops
+    // the card vanishing at the moment a success should be reported, and a
+    // test can hold it to that.
+    readonly property bool showSetupCard: Model.serviceCardVisible({
+        probed: Critter.Control.serviceProbed,
+        state: root.serviceState,
+        busy: Critter.Control.serviceBusy,
+        outcome: root.outcome,
+        probeError: Critter.Control.serviceProbeError
+    })
 
     function open() {
         root.controller.show();
@@ -151,7 +157,11 @@ Panel {
         PanelKeyCatcher {
             id: keyCatcher
             anchors.fill: parent
-            blocked: goalField.field.activeFocus
+            // Two things can need the keyboard more than the catcher does. The
+            // review dialog goes first: the lifecycle linter requires a
+            // focusable input's binding to end in activeFocus, and the goal
+            // field is still that input. See design decision 6.
+            blocked: reviewDialog.opened || goalField.field.activeFocus
             onCloseRequested: root.close()
             onTabRequested: function (direction) {
                 root.switchPanel(direction);
@@ -280,94 +290,113 @@ Panel {
                     wrapMode: Text.WordWrap
                 }
 
+                // Removal when there is nothing else to say. The setup card
+                // carries its own removal button, but a ready engine hides the
+                // card -- so until this existed, the one state most people are
+                // in was the one state with no way to remove the engine from
+                // the panel, which the engine-setup spec requires. It went
+                // unnoticed in live testing because the machine had been
+                // staged in a state where the card was showing.
+                Button {
+                    visible: root.canRemoveEngine && !root.showSetupCard
+                             && Critter.Control.available
+                    text: "Remove engine"
+                    foreground: root.barForeground
+                    bordered: true
+                    onClicked: Critter.Control.requestService("uninstall")
+                }
+
 
                 // ------------------------------------ engine setup / repair
                 //
-                // One state, one offered action, and nothing installed or
-                // removed without a review the user read first. The decision
-                // of which action belongs to which state is Model.serviceOffer,
-                // so it is covered by `node --test` rather than by whatever a
-                // running shell happens to be in the mood for.
+                // One state, one offered action. The review that has to come
+                // before an install or a removal is not in here any more: it
+                // is the modal at the bottom of this file, the way the shell's
+                // own plugins ask before doing something irreversible. What is
+                // here is the question of what state the engine is in, and --
+                // once something has been done -- what it came to.
                 //
-                // This sits above the settings controls and never replaces
-                // them: configuring a goal or a watch path before the engine
-                // exists is useful, the engine will read it when it starts, and
-                // a panel that refuses to configure until setup succeeds would
-                // be a worse panel than the one that had no setup at all.
+                // Every decision is Model's, so it is covered by `node --test`:
+                // which action a state gets, whether this card is shown, what
+                // an outcome says. This file only draws them.
+                //
+                // It sits above the settings and never replaces them.
+                // Configuring a goal or a watch path before the engine exists
+                // is useful, and the engine reads it when it starts.
 
                 Column {
                     id: setupCard
                     width: parent.width
                     spacing: Style.space(6)
-                    visible: root.needsSetup
-                             || Critter.Control.serviceFailedAction.length > 0
-                             || Critter.Control.serviceBusy
+                    visible: root.showSetupCard
 
-                    Text {
-                        width: parent.width
-                        text: root.confirming.length > 0
-                            ? Model.serviceConfirmTitle(root.confirming, root.service)
-                            : root.serviceOffer.headline
-                        color: root.serviceOffer.severity === "setup" ? Color.accent : root.barForeground
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                        font.bold: true
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Text {
-                        width: parent.width
-                        visible: root.confirming.length === 0 && root.serviceOffer.detail.length > 0
-                        text: root.serviceOffer.detail
-                        color: root.barForeground
-                        opacity: 0.7
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                        wrapMode: Text.WordWrap
-                    }
-
-                    // Which release is installed and which one this plugin
-                    // ships. Shown for the update case, where "newer" is the
-                    // whole claim being made.
-                    Text {
-                        width: parent.width
-                        visible: root.confirming.length === 0
-                                 && root.serviceState === "update-available"
-                        text: "installed " + (root.service.installedVersion || "unknown")
-                              + " · this plugin ships " + (root.service.sourceVersion || "unknown")
-                        color: root.barForeground
-                        opacity: 0.6
-                        font.family: "monospace"
-                        font.pixelSize: Style.font.caption
-                        wrapMode: Text.WordWrap
-                    }
-
-                    // ---- the review
+                    // ---- what was just done
                     //
-                    // Nothing has happened yet at this point. Every line below
-                    // names an effect, and the button under them is the first
-                    // thing in this flow that does anything at all.
+                    // Kept until dismissed or replaced by the next action. A
+                    // status refresh does not clear it; see
+                    // Model.nextServiceOutcome.
 
                     Column {
                         width: parent.width
-                        spacing: Style.space(2)
-                        visible: root.confirming.length > 0
+                        spacing: Style.space(4)
+                        visible: root.outcome !== null
 
-                        Repeater {
-                            model: Model.serviceDisclosure(root.confirming, root.service)
-                            delegate: Text {
-                                required property string modelData
-                                width: setupCard.width
-                                text: "· " + modelData
-                                color: root.barForeground
-                                opacity: 0.85
-                                font.family: "monospace"
-                                font.pixelSize: Style.font.caption
-                                textFormat: Text.PlainText
-                                wrapMode: Text.WrapAnywhere
-                            }
+                        // Success and failure differ in their words, not only
+                        // their colour: "did not finish" reads as a failure in
+                        // a theme where accent and urgent look alike.
+                        Text {
+                            width: parent.width
+                            text: root.outcome ? root.outcome.headline : ""
+                            color: root.outcome && root.outcome.ok ? Color.accent : Color.urgent
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.body
+                            font.bold: true
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            width: parent.width
+                            visible: root.outcome !== null && root.outcome.detail.length > 0
+                            text: root.outcome ? root.outcome.detail : ""
+                            color: root.barForeground
+                            opacity: 0.8
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.bodySmall
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            width: parent.width
+                            visible: root.outcome !== null && root.outcome.rollback.length > 0
+                            text: root.outcome ? root.outcome.rollback : ""
+                            color: root.barForeground
+                            opacity: 0.8
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.bodySmall
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            width: parent.width
+                            visible: root.outcome !== null && root.outcome.command.length > 0
+                            text: "run it yourself:\n  " + (root.outcome ? root.outcome.command : "")
+                            color: root.barForeground
+                            opacity: 0.7
+                            font.family: "monospace"
+                            font.pixelSize: Style.font.caption
+                            textFormat: Text.PlainText
+                            wrapMode: Text.WrapAnywhere
+                        }
+
+                        Button {
+                            text: "Dismiss"
+                            foreground: root.barForeground
+                            bordered: true
+                            onClicked: Critter.Control.dismissOutcome()
                         }
                     }
+
+                    // ---- what is happening now
 
                     Text {
                         width: parent.width
@@ -375,43 +404,78 @@ Panel {
                         text: Model.serviceProgress(Critter.Control.serviceAction)
                         color: Color.accent
                         font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                        wrapMode: Text.WordWrap
                     }
 
+                    // ---- what the engine needs next
+                    //
+                    // Hidden while an outcome is showing, so the two never
+                    // compete: first what happened, then -- once that is
+                    // dismissed -- what, if anything, still needs doing.
+
+                    Column {
+                        width: parent.width
+                        spacing: Style.space(6)
+                        visible: root.outcome === null && !Critter.Control.serviceBusy
+                                 && Model.serviceNeedsSetup(root.serviceState)
+
+                        Text {
+                            width: parent.width
+                            text: root.serviceOffer.headline
+                            color: root.serviceOffer.severity === "setup" ? Color.accent : root.barForeground
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.bodySmall
+                            font.bold: true
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Text {
+                            width: parent.width
+                            visible: root.serviceOffer.detail.length > 0
+                            text: root.serviceOffer.detail
+                            color: root.barForeground
+                            opacity: 0.7
+                            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                            font.pixelSize: Style.font.bodySmall
+                            wrapMode: Text.WordWrap
+                        }
+
+                        // Which release is installed and which one this plugin
+                        // ships. Shown for the update case, where "newer" is
+                        // the whole claim being made.
+                        Text {
+                            width: parent.width
+                            visible: root.serviceState === "update-available"
+                            text: "installed " + (root.service.installedVersion || "unknown")
+                                  + " · this plugin ships " + (root.service.sourceVersion || "unknown")
+                            color: root.barForeground
+                            opacity: 0.6
+                            font.family: "monospace"
+                            font.pixelSize: Style.font.caption
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    // The offered action, and removal beside it. An install or
+                    // a removal opens the review; start and restart act
+                    // directly, because they replace no file and remove nothing.
                     Flow {
                         width: parent.width
                         spacing: Style.space(6)
-                        visible: !Critter.Control.serviceBusy
+                        visible: root.outcome === null && !Critter.Control.serviceBusy
 
-                        // Before the review: the offer. After it: the action.
                         Button {
-                            visible: root.confirming.length > 0
-                            text: Model.serviceConfirmLabel(root.confirming, root.service)
-                            foreground: Color.accent
-                            bordered: true
-                            onClicked: Critter.Control.confirmService()
-                        }
-                        Button {
-                            visible: root.confirming.length > 0
-                            text: "Cancel"
-                            foreground: root.barForeground
-                            bordered: true
-                            onClicked: Critter.Control.cancelService()
-                        }
-                        Button {
-                            visible: root.confirming.length === 0
+                            visible: Model.serviceNeedsSetup(root.serviceState)
                                      && root.serviceOffer.action.length > 0
                             text: root.serviceOffer.label
                             foreground: Color.accent
                             bordered: true
                             onClicked: Critter.Control.requestService(root.serviceOffer.action)
                         }
-                        // Removal is symmetric with setup and lives beside it,
-                        // unemphasised. Hidden during a review so the only two
-                        // buttons on screen are the one being asked about and
-                        // the way out of it.
                         Button {
-                            visible: root.confirming.length === 0 && root.canRemoveEngine
+                            visible: root.canRemoveEngine
                             text: "Remove engine"
                             foreground: root.barForeground
                             bordered: true
@@ -419,43 +483,17 @@ Panel {
                         }
                     }
 
-                    // ---- what went wrong, and what to type instead
-
+                    // A probe that could not reach the engine at all. Not an
+                    // outcome -- nothing the user did failed -- so it is shown
+                    // on its own and never replaces one.
                     Text {
                         width: parent.width
-                        visible: Critter.Control.serviceFailedAction.length > 0
-                        text: Critter.Control.serviceFailedAction + " failed — "
-                              + Critter.Control.serviceFailureReason
+                        visible: Critter.Control.serviceProbeError.length > 0
+                        text: "could not check the engine — " + Critter.Control.serviceProbeError
                         color: Color.urgent
                         font.family: root.bar ? root.bar.fontFamily : Style.font.family
                         font.pixelSize: Style.font.bodySmall
                         wrapMode: Text.WordWrap
-                    }
-
-                    Text {
-                        width: parent.width
-                        visible: Critter.Control.serviceRolledBack
-                        text: Critter.Control.serviceRollbackFailed
-                            ? "the previous engine was put back, but the service could not be restored"
-                            : "nothing was changed — the previous engine was put back"
-                        color: root.barForeground
-                        opacity: 0.8
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Text {
-                        width: parent.width
-                        visible: Critter.Control.serviceFailedAction.length > 0
-                                 && root.fallbackCommand.length > 0
-                        text: "run it yourself:\n  " + root.fallbackCommand
-                        color: root.barForeground
-                        opacity: 0.7
-                        font.family: "monospace"
-                        font.pixelSize: Style.font.caption
-                        textFormat: Text.PlainText
-                        wrapMode: Text.WrapAnywhere
                     }
                 }
 
@@ -874,6 +912,64 @@ Panel {
                         font.family: "monospace"
                         font.pixelSize: Style.font.caption
                         wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
+            // ------------------------------------------------ the review
+            //
+            // The shell's own ConfirmDialog, configured the way its menu
+            // plugin configures it before uninstalling something. Nothing is
+            // installed or removed until its confirm button is pressed; Cancel,
+            // Escape, and a click on the scrim all do nothing at all.
+            //
+            // It owns no process, timer or file read, so it may live in this
+            // per-screen subtree. What it is asking about lives in Control, so
+            // a review opened on one screen is the same review on another.
+            //
+            // It only asks. Progress and the result are the setup card's job:
+            // ConfirmDialog is a fixed two-button message dialog with no third
+            // state, and a modal for an action that takes under two seconds
+            // would vanish faster than it could be read.
+            ConfirmDialog {
+                id: reviewDialog
+                anchors.fill: parent
+                z: 10
+                opened: root.confirming.length > 0
+                message: Model.serviceDisclosureMessage(root.confirming, root.service,
+                                                        Critter.Control.homeDir)
+                confirmText: Model.serviceConfirmLabel(root.confirming, root.service)
+                cancelText: "Cancel"
+                foreground: root.barForeground
+                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                onConfirmed: Critter.Control.confirmService()
+                onCanceled: Critter.Control.cancelService()
+
+                // PanelKeyCatcher consumes Escape itself and has no hook to let
+                // anything answer first, so while this is open the catcher is
+                // blocked (see its `blocked` binding) and keys come here.
+                // Escape is consumed by the dialog and cannot also close the
+                // panel. Focus goes back to the catcher when it closes, so the
+                // next Escape closes the panel as it always has.
+                Keys.onPressed: function (event) {
+                    if (reviewDialog.handleKey(event))
+                        event.accepted = true;
+                }
+                // Cancel is pre-selected, and put back every time the review
+                // opens. ConfirmDialog defaults to its confirm button, which
+                // is right for the menu plugin's "Uninstall" but would let one
+                // stray Enter, in the instant the review appears, install an
+                // engine and start a service. That is not a confirmation of a
+                // disclosure nobody has had time to read. It also does not
+                // reset itself, so without this the second review would open
+                // wherever the first one was left.
+                selectedIndex: 0
+                onOpenedChanged: {
+                    if (reviewDialog.opened) {
+                        reviewDialog.selectedIndex = 0;
+                        reviewDialog.forceActiveFocus();
+                    } else {
+                        keyCatcher.forceActiveFocus();
                     }
                 }
             }

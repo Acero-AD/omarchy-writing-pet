@@ -671,14 +671,19 @@ function serviceCanRemove(status) {
 // status resolved, not a guess repeated in a second place that can fall out of
 // step with the first.
 
+// Where the engine goes when status has not said yet. Named once, because the
+// review and its dialog rendering both need them and must not drift apart.
+var ENGINE_PATH_PLACEHOLDER = "~/.local/bin/writing-critter";
+var UNIT_PATH_PLACEHOLDER = "~/.config/systemd/user/writing-critter.service";
+
 function servicePlaceholder(value, fallback) {
   return (typeof value === "string" && value.length > 0) ? value : fallback;
 }
 
 function serviceDisclosure(action, status) {
   var s = status || defaultServiceStatus();
-  var enginePath = servicePlaceholder(s.enginePath, "~/.local/bin/writing-critter");
-  var unitPath = servicePlaceholder(s.unitPath, "~/.config/systemd/user/writing-critter.service");
+  var enginePath = servicePlaceholder(s.enginePath, ENGINE_PATH_PLACEHOLDER);
+  var unitPath = servicePlaceholder(s.unitPath, UNIT_PATH_PLACEHOLDER);
 
   if (action === "install") {
     return [
@@ -710,12 +715,19 @@ function serviceConfirmTitle(action, status) {
   return "";
 }
 
+// The confirm button of the review dialog. One word, because ConfirmDialog's
+// buttons are a fixed Style.space(88) wide with no elide: "Update and restart"
+// is 18 characters and, in the monospace family Omarchy uses by default, runs
+// past its own border. The question above the buttons already says what will
+// happen; the shell's own uninstall button says "Uninstall" and nothing more.
+var CONFIRM_LABEL_MAX = 10;
+
 function serviceConfirmLabel(action, status) {
   var s = status || defaultServiceStatus();
   if (action === "install")
-    return s.installed ? "Update and restart" : "Install and start";
+    return s.installed ? "Update" : "Install";
   if (action === "uninstall")
-    return "Remove engine";
+    return "Remove";
   return "";
 }
 
@@ -854,6 +866,198 @@ function serviceSettlement(action, reason, raw, previous) {
 var STARTING_REPROBE_MAX = 3;
 
 
+// ---------------------------------------------------------- the outcome
+//
+// What the panel says after an action finishes. Before this existed, a
+// successful install made every term of the setup card's `visible` binding
+// false at once, so the card vanished at the exact moment it should have said
+// "that worked" -- while a failure stayed on screen and explained itself. The
+// one case with no feedback was the one that worked.
+//
+// An outcome is a plain record, held by Control so every panel sees the same
+// one, and cleared only by the user dismissing it or by the next action
+// replacing it. "Acknowledged" is not a flag on it: an acknowledged outcome is
+// simply gone, which leaves nothing to keep in step.
+
+// Success, per action. Install has three because "install" is the action for
+// both a first setup and an update, and "the engine is installed" is not what
+// someone who just updated needs to hear.
+var OUTCOME_SUCCESS = {
+  install: {
+    headline: "The engine is installed and running.",
+    detail: "It will start on its own each time you log in."
+  },
+  update: {
+    headline: "The engine was updated and restarted.",
+    detail: "It is now running the version that ships with this plugin."
+  },
+  current: {
+    headline: "The engine was already up to date.",
+    detail: "Nothing needed replacing, and it is running."
+  },
+  start: {
+    headline: "The engine is running.",
+    detail: "Counting resumes the next time a writing app has focus."
+  },
+  restart: {
+    headline: "The engine was restarted.",
+    detail: "Counting resumes the next time a writing app has focus."
+  },
+  // The one that most needs saying. The review promised the settings and
+  // history would be kept; until now nothing confirmed it afterwards.
+  uninstall: {
+    headline: "The engine was removed.",
+    detail: "Its program and user service are gone. Your settings, today's count "
+          + "and your history were kept, so installing again picks up where you left off."
+  },
+  nothingToRemove: {
+    headline: "There was no engine to remove.",
+    detail: "Nothing was changed."
+  }
+};
+
+// Failure headlines say what did not happen, in the user's terms. The
+// engine's own sentence -- which names the systemd step that refused -- goes in
+// the detail beneath it.
+var OUTCOME_FAILURE = {
+  install: "Setup did not finish.",
+  update: "The update did not finish.",
+  start: "The engine did not start.",
+  restart: "The engine did not restart.",
+  uninstall: "The engine was not removed."
+};
+
+// `previous` is the status from before the action ran -- still in Control at
+// the moment an action settles, because settling is what replaces it. It is
+// what tells a first setup from an update: both are the "install" action.
+function serviceOutcome(action, settlement, previous, enginePath) {
+  if (action === "status" || SERVICE_ACTIONS.indexOf(action) === -1) return null;
+  var before = previous || defaultServiceStatus();
+  var after = settlement.status || defaultServiceStatus();
+  var wasUpdate = action === "install" && before.installed === true;
+
+  if (settlement.failed) {
+    var rollback = "";
+    if (settlement.rolledBack && settlement.rollbackFailed)
+      rollback = "The previous files were put back, but the service could not be restored.";
+    else if (settlement.rolledBack)
+      rollback = before.installed
+        ? "Nothing changed — the previous engine was put back."
+        : "Nothing was left installed.";
+    return {
+      action: action,
+      ok: false,
+      headline: OUTCOME_FAILURE[wasUpdate ? "update" : action],
+      detail: serviceText(settlement.failureReason),
+      rollback: rollback,
+      command: serviceCommand(enginePath, action)
+    };
+  }
+
+  var key = action;
+  if (action === "install")
+    key = !after.changed ? "current" : (wasUpdate ? "update" : "install");
+  else if (action === "uninstall" && !after.changed)
+    key = "nothingToRemove";
+  return {
+    action: action,
+    ok: true,
+    headline: OUTCOME_SUCCESS[key].headline,
+    detail: OUTCOME_SUCCESS[key].detail,
+    rollback: "",
+    command: ""
+  };
+}
+
+// The outcome after something settles. A status probe returns the current one
+// untouched: a probe is not an outcome, and letting it clear one would make a
+// success message flicker away on its own the moment the panel re-checked.
+// Anything else replaces it -- the newest action is the one worth reporting.
+function nextServiceOutcome(current, action, settlement, previous, enginePath) {
+  if (action === "status") return current === undefined ? null : current;
+  return serviceOutcome(action, settlement, previous, enginePath);
+}
+
+// A probe that could not reach the engine is still worth saying, but it is not
+// an outcome of anything the user did, so it is carried separately. Any other
+// settle clears it: whatever just ran has told us more than the failed probe.
+function nextProbeError(action, settlement) {
+  if (action === "status" && settlement.failed) return serviceText(settlement.failureReason);
+  return "";
+}
+
+// A caller asked for an action outside the vocabulary. Not reachable from the
+// panel's own controls; kept so a future caller inventing one is told so
+// rather than silently ignored.
+function serviceRefused(action) {
+  return {
+    action: "",
+    ok: false,
+    headline: "That is not something the panel can do.",
+    detail: serviceText(String(action)) + " is not an allowed action.",
+    rollback: "",
+    command: ""
+  };
+}
+
+// Whether someone is waiting on the engine. A status probe is excluded: it
+// runs every time a panel opens, so counting it made a healthy engine's card
+// flash "checking…" on every single open, for a question nobody asked.
+function serviceWorking(action) {
+  return typeof action === "string" && action.length > 0 && action !== "status";
+}
+
+// Whether the setup card is on screen. The outcome is a fourth term here, not
+// a change to serviceNeedsSetup: a ready engine genuinely does not need setup,
+// and teaching that function otherwise would break the state machine that the
+// card's offered action is chosen from.
+function serviceCardVisible(view) {
+  var v = view || {};
+  if (v.busy === true) return true;
+  if (v.outcome) return true;
+  if (typeof v.probeError === "string" && v.probeError.length > 0) return true;
+  return v.probed === true && serviceNeedsSetup(v.state);
+}
+
+// A path as the review dialog shows it.
+//
+// ConfirmDialog sets its message at title size with WordWrap, which only
+// breaks between words -- and a path is one word. Measured against the real
+// component: the card is min(panel width - 32, 370) wide, about 30 monospace
+// characters a line in this panel, while the unit path here is 61 characters
+// with no space in it. It ran straight past the card's border.
+//
+// So: a zero-width space after every "/" gives WordWrap somewhere to break,
+// and a leading $HOME is written as "~" -- but only when the path genuinely
+// starts there. A custom XDG_CONFIG_HOME puts the unit somewhere else, and the
+// review has to name where it will really go.
+var ZERO_WIDTH_SPACE = "\u200B";
+
+function servicePathForDisplay(path, homeDir) {
+  var shown = path;
+  if (typeof homeDir === "string" && homeDir.length > 1 && shown.indexOf(homeDir + "/") === 0)
+    shown = "~" + shown.substring(homeDir.length);
+  return shown.split("/").join("/" + ZERO_WIDTH_SPACE);
+}
+
+// The review, as the one string ConfirmDialog takes. Same lines, same words,
+// same order as serviceDisclosure; only the paths are made wrappable, and the
+// container changes.
+function serviceDisclosureMessage(action, status, homeDir) {
+  var s = status || defaultServiceStatus();
+  var shown = {};
+  for (var key in s) {
+    if (Object.prototype.hasOwnProperty.call(s, key)) shown[key] = s[key];
+  }
+  shown.enginePath = servicePathForDisplay(servicePlaceholder(s.enginePath, ENGINE_PATH_PLACEHOLDER), homeDir);
+  shown.unitPath = servicePathForDisplay(servicePlaceholder(s.unitPath, UNIT_PATH_PLACEHOLDER), homeDir);
+  var lines = serviceDisclosure(action, shown);
+  if (lines.length === 0) return "";
+  return serviceConfirmTitle(action, s) + "\n\n"
+       + lines.map(function (line) { return "· " + line; }).join("\n");
+}
+
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     STAGE_COUNT: STAGE_COUNT,
@@ -913,6 +1117,20 @@ if (typeof module !== "undefined" && module.exports) {
     queueHolds: queueHolds,
     queueNext: queueNext,
     watchdogFor: watchdogFor,
-    serviceSettlement: serviceSettlement
+    serviceSettlement: serviceSettlement,
+    OUTCOME_SUCCESS: OUTCOME_SUCCESS,
+    OUTCOME_FAILURE: OUTCOME_FAILURE,
+    serviceOutcome: serviceOutcome,
+    nextServiceOutcome: nextServiceOutcome,
+    nextProbeError: nextProbeError,
+    serviceRefused: serviceRefused,
+    serviceCardVisible: serviceCardVisible,
+    serviceWorking: serviceWorking,
+    CONFIRM_LABEL_MAX: CONFIRM_LABEL_MAX,
+    ZERO_WIDTH_SPACE: ZERO_WIDTH_SPACE,
+    ENGINE_PATH_PLACEHOLDER: ENGINE_PATH_PLACEHOLDER,
+    UNIT_PATH_PLACEHOLDER: UNIT_PATH_PLACEHOLDER,
+    servicePathForDisplay: servicePathForDisplay,
+    serviceDisclosureMessage: serviceDisclosureMessage
   };
 }

@@ -48,8 +48,8 @@ progress, and a streak of the last seven days.
 > To remove it, see [Removing it](#removing-it) — the engine is a user service
 > and Omarchy runs no uninstall hook, so the order matters.
 
-> **Status:** implemented. Passes `omarchy plugin validate`, `qmllint`, 238
-> Python tests, 95 JavaScript tests, the QML lifecycle lint and the security
+> **Status:** implemented. Passes `omarchy plugin validate`, the Qt 6 `qmllint`,
+> 238 Python tests, 137 JavaScript tests, the QML lifecycle lint and the security
 > guard; every service state has been reproduced against a real systemd user
 > manager; and the setup card has been driven by hand in a live bar — see
 > [Verification status](#verification-status).
@@ -140,21 +140,33 @@ install, and Omarchy deliberately runs no install hook when it adds a plugin.
 So a freshly added Writing Critter is a bar widget with nothing behind it.
 
 Open the panel and it says so, and offers to fix it. Before anything happens
-you get a review naming every effect:
+the panel dims and asks, in the same dialog Omarchy's own menu uses before
+uninstalling something, naming every effect:
 
 ```
-Set up the engine?
-· Copies the engine to /home/you/.local/bin/writing-critter
-· Writes /home/you/.config/systemd/user/writing-critter.service
-· Enables and starts that service as you — not as root
-· No administrator access, no network, no package manager
-· Your settings, today's count and your history are not touched
-
-  [ Install and start ]   [ Cancel ]
+┌──────────────────────────────────────┐
+│ Set up the engine?                   │
+│                                      │
+│ · Copies the engine to               │
+│   ~/.local/bin/writing-critter       │
+│ · Writes ~/.config/systemd/user/     │
+│   writing-critter.service            │
+│ · Enables and starts that service    │
+│   as you — not as root               │
+│ · No administrator access, no        │
+│   network, no package manager        │
+│ · Your settings, today's count and   │
+│   your history are not touched       │
+│                                      │
+│                [ Cancel ] [ Install ]│
+└──────────────────────────────────────┘
 ```
 
-Nothing is written until you press the second button. Cancel does nothing at
-all.
+Nothing is written until you choose **Install**. **Cancel** is selected when the
+dialog opens, so a stray Enter does nothing; Cancel, Escape and a click outside
+the dialog all leave everything exactly as it was, and the panel stays open.
+A path under your home folder is shown with `~`; a custom `XDG_CONFIG_HOME` is
+shown in full, because the review has to name where the unit will really go.
 
 The panel asks the engine what state it is in each time you open it, and offers
 the one action that fits:
@@ -166,15 +178,26 @@ the one action that fits:
 | Installed and current, not running | **Start engine** |
 | Running but not publishing a count | **Restart engine** |
 | Just started | waits, and checks again |
-| Running and counting | nothing — the card disappears |
+| Running and counting | nothing, apart from **Remove engine** under the engine line |
 
 Start and restart do not ask for confirmation: they replace no file and remove
 nothing, and a dialog for them would only teach you to dismiss dialogs.
 
-If anything fails, the panel says which step refused and why, leaves the rest
-of the settings working, and shows the command to run yourself. An install that
-fails part-way puts the previous engine back rather than leaving you with half
-of a new one; if it could not restore the *service* as well, it says that
+When an action finishes, the panel says what it came to, and keeps saying it
+until you press **Dismiss** or do something else — closing the panel, reopening
+it, or opening it on another monitor all show the same result:
+
+| You did | It says |
+|---|---|
+| First setup | The engine is installed and running, and will start each time you log in |
+| Update | The engine was updated and restarted |
+| Start / restart | The engine is running; counting resumes when a writing app has focus |
+| Remove engine | What was removed, and that your settings, count and history were kept |
+
+If anything fails, it says which step refused and why, leaves the rest of the
+settings working, and shows the command to run yourself. An install that fails
+part-way puts the previous engine back rather than leaving you with half of a
+new one; if it could not restore the *service* as well, it says that
 separately.
 
 ### The same thing from a terminal
@@ -345,13 +368,28 @@ language without touching this plugin.
 ## Development
 
 ```bash
-node --test tests/*.test.mjs                          # 95 tests, no dependencies
+node --test tests/*.test.mjs                          # 137 tests, no dependencies
 python3 -m unittest discover -s tests -p 'test_*.py'  # 238 tests, stdlib only
 ./scripts/qml-lifecycle-lint.py                       # the postmortem's rules
 ./scripts/security-guard.sh                           # privacy + both allowlists
 omarchy plugin validate .
-qmllint -I "$OMARCHY_PATH/shell" *.qml
+qs=$(mktemp -d) && ln -s "$OMARCHY_PATH/shell" "$qs/qs" \
+  && /usr/lib/qt6/bin/qmllint -I "$qs" *.qml         # see below — not plain `qmllint`
 ```
+
+About that last line. On Arch, `qmllint` on the `PATH` is the **Qt 5** one
+from `qt5-declarative`: it checks syntax only, and it passes a property that
+does not exist. Quickshell is Qt 6, so the linter that actually type-checks
+this plugin is `/usr/lib/qt6/bin/qmllint`. It also needs `qs.Ui` and
+`qs.Commons` to resolve, which means a directory named `qs` pointing at the
+shell — hence the temporary link, kept out of the repository because this
+plugin ships no symlinks. Even then it exits 0 with warnings, so read them.
+
+Expect about a hundred warnings that are not bugs: members reached through
+objects the shell declares only as `QtObject` (`root.bar.fontFamily`,
+`Style.font.body`, a `Loader`'s `item`), unqualified access in older Repeater
+delegates, and the `QProcess::ExitStatus` one documented in `Control.qml`.
+Anything else is worth reading.
 
 `Model.js` holds every pure function — counting, baselines, rollover, stage and
 mood, art assembly, source validation, the setup state machine, and the command
@@ -410,7 +448,7 @@ swaps the engine underneath a running process.
 
 | | |
 |---|---|
-| Unit tests, security guard, lifecycle lint, manifest | ✅ 238 Python, 95 JS, all passing |
+| Unit tests, security guard, lifecycle lint, manifest | ✅ 238 Python, 137 JS, all passing |
 | Counting real writing | ✅ verified in Typora and an Obsidian vault |
 | Rollover, restart, restored baselines | ✅ covered by tests and a live restart |
 | Live bar rendering | ✅ the critter renders from the state file |

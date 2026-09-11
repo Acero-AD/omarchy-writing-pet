@@ -70,6 +70,27 @@ an array. `ConfirmDialog.message` is a single string, so the array is joined
 with newlines and a leading marker per line. The wording does not change; only
 its container does.
 
+Reading the component during implementation showed it was built for a
+one-sentence question, and three things had to change to carry a disclosure.
+Each is measured against the real component rather than assumed:
+
+- **Paths wrap.** The message is `Style.font.title` (14px) with `WordWrap`,
+  which never breaks inside a word, in a card `min(panel - 32, 370)` wide —
+  about 30 monospace characters a line in this panel. The unit path was a
+  61-character token with no space in it and ran past the card's border. A
+  zero-width space after each `/` gives `WordWrap` a place to break, and a
+  leading `$HOME` is shown as `~` only when the path genuinely starts there, so
+  a custom `XDG_CONFIG_HOME` is still named in full. Longest unbreakable run:
+  23 characters.
+- **Confirm labels are one word.** The buttons are a fixed `Style.space(88)`
+  wide with no elide, at caption size. "Update and restart" is 18 characters
+  and overran its own border in the default monospace family; "Install",
+  "Update" and "Remove" fit. The question above says what will happen.
+- **Cancel is pre-selected.** `ConfirmDialog` defaults to its confirm button,
+  which suits the menu plugin's "Uninstall" but would let one stray Enter, in
+  the instant the review appears, install an engine. It also does not reset its
+  selection between openings, so the panel resets it each time.
+
 ### 2. Progress and the outcome do NOT go in the dialog
 
 `ConfirmDialog` is a fixed two-button message dialog. It has no third state, no
@@ -124,13 +145,25 @@ rather than a change to `serviceNeedsSetup` — `ready` genuinely does not need
 setup, and teaching that function to lie would break the state machine the
 panel's actions are chosen from.
 
-### 6. Key handling follows the established order
+### 6. The dialog takes the keyboard while it is open
 
-The panel's `PanelKeyCatcher` calls `dialog.handleKey(event)` first and accepts
-the event if the dialog took it, exactly as `Menu.qml` and `Clipboard.qml` do.
-Escape therefore cancels the dialog before it reaches the panel's own close.
-The existing `NumberField`/`blocked` pairing is untouched, and the lifecycle
-linter's rule about focusable inputs still applies unchanged.
+`Menu.qml` and `Clipboard.qml` call `dialog.handleKey(event)` first from their
+own hand-written key-catching `Item`. This panel uses the shell's
+`PanelKeyCatcher` instead, which consumes Escape itself at `Keys.BeforeItem`
+priority and has no hook to call something first — found when implementing,
+by reading it; an earlier draft of this decision assumed one.
+
+The equivalent here uses the mechanism the catcher does offer. While the
+dialog is open the catcher is `blocked`, so it forwards every key instead of
+acting on it; the dialog takes active focus and routes keys to `handleKey`
+through its own attached `Keys.onPressed`; when it closes, focus returns to the
+catcher. Escape therefore cancels the dialog and is consumed there, so the
+same keystroke cannot also close the panel. It is the pattern the goal field
+already uses to keep the catcher from swallowing its keys.
+
+The lifecycle linter requires a `blocked` binding that ends in `activeFocus`
+wherever a focusable input exists, so the dialog's term goes first:
+`blocked: <dialog open> || goalField.field.activeFocus`.
 
 ### 7. What the tests can and cannot reach
 
@@ -153,9 +186,11 @@ wiring, and that is verified by driving it in a live bar.
 - **Two panels showing the same outcome twice** → it is singleton state, so
   both show the same record and dismissing on either dismisses both. That is
   the intended behaviour, and worth confirming on two monitors.
-- **The dialog's message is a joined string** → a very long resolved path could
-  wrap awkwardly in a fixed-width card. The paths are bounded by
-  `Model.serviceText` already; check the rendering with a long `$HOME`.
+- **The dialog's message is a joined string** → this was worse than "awkward":
+  measured, both paths overflowed the card, because `WordWrap` cannot break a
+  path. Resolved in decision 1 with break points and `~`; a test bounds the
+  longest unbreakable run for a long `$HOME`. The live check still matters,
+  because only rendering shows what the font actually does.
 - **Escape now has three meanings in the panel** (dismiss dialog, release the
   goal field, close the panel) → the order is fixed and tested by hand; the
   dialog is modal, so it is unambiguous while open.
