@@ -33,8 +33,8 @@
 
 ## 6. Marketplace preview
 
-- [ ] 6.1 Capture the final bar critter and open panel using demonstration data and save a single root `preview.png` without personal writing metadata or unrelated desktop content
-- [ ] 6.2 Inspect the image for accurate rendering and legibility, verify it decodes and fits current marketplace input limits, and embed it in the README with descriptive alt text
+- [x] 6.1 Capture the final bar critter and open panel using demonstration data and save a single root `preview.png` without personal writing metadata or unrelated desktop content
+- [x] 6.2 Inspect the image for accurate rendering and legibility, verify it decodes and fits current marketplace input limits, and embed it in the README with descriptive alt text
 
 ## 7. Final review and publishing handoff
 

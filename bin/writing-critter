@@ -678,13 +678,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     log("engine.start", version=VERSION, config=config.path, state=STATE_PATH)
 
     blocked = engine.blocking_reason()
-    if blocked:
-        log("engine.blocked", reason=blocked)
-        print(f"\nnot counting: {blocked}", file=sys.stderr)
-        return 1
-
     engine.load_state()
-    engine.seed_baselines()
+    if blocked:
+        # A fresh setup has no path until the user finishes configuring the
+        # panel. That is a valid idle state, not a process fault: returning 1
+        # makes the systemd unit restart-loop and leaves the panel unable to
+        # present setup as successful.
+        log("engine.idle", reason=blocked)
+    else:
+        engine.seed_baselines()
     config_mtime = config.mtime()
     focus = HyprlandFocus(log)
     engine.set_focus(focus.current())
@@ -732,9 +734,17 @@ def cmd_run(args: argparse.Namespace) -> int:
                         engine.config = config
                         log("config.reloaded", paths=len(config.watch_paths),
                             goal=config.values["goal"])
-                        # Baseline whatever just became visible, or every word
-                        # already in a newly watched vault counts as written today.
-                        engine.seed_baselines()
+                        blocked = engine.blocking_reason()
+                        if blocked:
+                            log("engine.idle", reason=blocked)
+                        else:
+                            # Baseline whatever just became visible, or every word
+                            # already in a newly watched vault counts as written today.
+                            engine.seed_baselines()
+                        # The current focus was captured at startup. Recompute
+                        # from it so adding the first path immediately reflects
+                        # whether the engine is awake, without a service restart.
+                        engine.refresh_gate()
                         # Publish at once. Goal and mascot are user-visible and
                         # have just changed; without this the new value reaches
                         # the bar only on the next counted cycle or the next

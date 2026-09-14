@@ -26,6 +26,16 @@ progress, and a streak of the last seven days.
                         "The shell is thinning."
 ```
 
+## Preview
+
+The captures below use a narrow demonstration path. No document titles or
+writing history are displayed; the panel shows the installed engine waiting for
+a configured writing app to receive focus.
+
+![Writing Critter resting in the Omarchy bar](docs/preview-bar.png)
+
+![Writing Critter's open panel with the engine installed and running, a zero-word goal, and a narrow demonstration watch path](preview.png)
+
 > ## ⚠️ Pre-release — counting works, live soak still owed
 >
 > On 2026-09-02 this plugin **segfaulted `quickshell` in a crash loop**, taking
@@ -49,7 +59,7 @@ progress, and a streak of the last seven days.
 > and Omarchy runs no uninstall hook, so the order matters.
 
 > **Status:** implemented. Passes `omarchy plugin validate`, the Qt 6 `qmllint`,
-> 238 Python tests, 137 JavaScript tests, the QML lifecycle lint and the security
+> 241 Python tests, 137 JavaScript tests, the QML lifecycle lint and the security
 > guard; every service state has been reproduced against a real systemd user
 > manager; and the setup card has been driven by hand in a live bar — see
 > [Verification status](#verification-status).
@@ -468,7 +478,7 @@ swaps the engine underneath a running process.
 
 | | |
 |---|---|
-| Unit tests, security guard, lifecycle lint, manifest | ✅ 238 Python, 137 JS, all passing |
+| Unit tests, security guard, lifecycle lint, manifest | ✅ 241 Python, 137 JS, all passing |
 | Counting real writing | ✅ verified in Typora and an Obsidian vault |
 | Rollover, restart, restored baselines | ✅ covered by tests and a live restart |
 | Live bar rendering | ✅ the critter renders from the state file |
@@ -485,7 +495,8 @@ swaps the engine underneath a running process.
 | Service mounting | n/a — the engine is a systemd user service, not a shell service |
 | Shell stability under long use | ⚠️ shell PID unchanged so far; a proper soak is still owed |
 | Keyboard, themes and bar layouts | ✅ exercised alongside the setup card |
-| Screenshot / marketplace submission | ⬜ pending |
+| Marketplace preview | ✅ captured with demonstration data; re-review against the final runtime candidate |
+| Marketplace submission | ⬜ pending |
 
 The [release verification record](docs/RELEASE-VERIFICATION.md) separates
 completed checks from the pending live stability gate; it does not claim

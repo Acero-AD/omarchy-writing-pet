@@ -5,6 +5,7 @@ import argparse
 import fcntl
 import importlib.machinery
 import importlib.util
+import io
 import os
 import json
 import subprocess
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 # The engine is an extensionless executable, so it needs an explicit loader.
@@ -588,6 +590,101 @@ class TestConfigReload(TempConfig):
         first = cfg.mtime()
         os.utime(self.path, (first + 10, first + 10))
         self.assertNotEqual(cfg.mtime(), first)
+
+
+class TestIdleDaemonStartup(TempConfig):
+    """A fresh setup must wait for configuration, not restart-loop."""
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    class Focus:
+        def __init__(self, _log, app="typora"):
+            self.app = app
+
+        def current(self):
+            return self.app
+
+        def connect(self):
+            return TestIdleDaemonStartup.Socket()
+
+        def drain(self, _sock):
+            return []
+
+    def test_no_watch_path_publishes_idle_state_without_scanning(self):
+        self.write(json.dumps({"watch": [], "pollSeconds": 1}))
+        state = Path(self.dir.name) / "state.json"
+        output = io.StringIO()
+
+        with (unittest.mock.patch.object(engine, "STATE_PATH", state),
+              unittest.mock.patch.object(engine, "HyprlandFocus", self.Focus),
+              unittest.mock.patch.object(engine.select, "select",
+                                         side_effect=KeyboardInterrupt),
+              unittest.mock.patch.object(engine, "scan",
+                                         side_effect=AssertionError("idle daemon scanned")) as scan,
+              unittest.mock.patch("sys.stdout", output)):
+            code = engine.cmd_run(argparse.Namespace(config=self.path))
+
+        self.assertEqual(code, 0, "a deliberate service stop is successful")
+        scan.assert_not_called()
+        published = json.loads(state.read_text())
+        self.assertEqual(published["wordsToday"], 0)
+        self.assertFalse(published["gateOpen"])
+        self.assertIn("updatedAt", published)
+        self.assertIn("engine.idle", output.getvalue())
+        self.assertIn("no watch paths configured", output.getvalue())
+
+    def test_no_writing_app_keeps_the_gate_closed_without_scanning(self):
+        vault = Path(self.dir.name) / "vault"
+        vault.mkdir()
+        (vault / "note.md").write_text("do not read this")
+        self.write(json.dumps({"watch": [str(vault)], "whitelist": []}))
+        e = engine.Engine(engine.Config.load(self.path), engine.Log(enabled=False))
+        e.set_focus("typora")
+        self.assertFalse(e.gate_open())
+
+        calls = []
+        e.cycle = lambda: calls.append("scan")
+        if e.refresh_gate():
+            e.cycle()
+        self.assertEqual(calls, [], "a blocked gate must not invoke a cycle")
+
+    def test_adding_first_path_reloads_idle_daemon_and_seeds_it(self):
+        vault = Path(self.dir.name) / "vault"
+        vault.mkdir()
+        note = vault / "existing.md"
+        note.write_text("one two three four")
+        self.write(json.dumps({"watch": [], "whitelist": ["typora"], "pollSeconds": 1}))
+        state = Path(self.dir.name) / "state.json"
+        select_calls = 0
+
+        def tick(*_):
+            nonlocal select_calls
+            select_calls += 1
+            if select_calls == 1:
+                self.write(json.dumps({"watch": [str(vault)], "whitelist": ["typora"],
+                                       "pollSeconds": 1}))
+                changed = self.path.stat().st_mtime + 10
+                os.utime(self.path, (changed, changed))
+                return [], [], []
+            raise KeyboardInterrupt
+
+        with (unittest.mock.patch.object(engine, "STATE_PATH", state),
+              unittest.mock.patch.object(engine, "HyprlandFocus", self.Focus),
+              unittest.mock.patch.object(engine.select, "select", side_effect=tick)):
+            code = engine.cmd_run(argparse.Namespace(config=self.path))
+
+        self.assertEqual(code, 0)
+        published = json.loads(state.read_text())
+        self.assertTrue(published["gateOpen"], "the existing focus becomes usable after reload")
+        self.assertEqual(published["wordsToday"], 0,
+                         "existing documents must be baselined, not counted")
+        tracking = json.loads(state.with_name("tracking.json").read_text())
+        self.assertIn(str(note), tracking)
 
 
 class TestConfigLocking(TempConfig):
