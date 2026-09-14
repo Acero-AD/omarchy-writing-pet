@@ -43,8 +43,8 @@
 ## 6. Verification
 
 - [x] 6.1 Run all Python and JavaScript tests, the QML lifecycle lint, the security guard, `qmllint`, strict OpenSpec validation, and `omarchy plugin validate`
-- [ ] 6.2 In a live bar, drive install, update, start, restart and uninstall and confirm each states its outcome and holds it until dismissed
-- [ ] 6.3 Confirm the review is dismissible with Escape, keyboard-navigable, and that the panel stays open when it is dismissed
-- [ ] 6.4 Confirm the dialog renders without clipping on a narrow bar, a small screen, and a proportional theme, including with a long home directory path in the disclosure
-- [ ] 6.5 Confirm an action started with the panel closed, and an action completing with panels open on two screens, both report the same outcome and dismiss together
-- [ ] 6.6 Confirm a status refresh after an action leaves the outcome on screen
+- [x] 6.2 In a live bar, drive install, update, start, restart and uninstall and confirm each states its outcome and holds it until dismissed
+- [x] 6.3 Confirm the review is dismissible with Escape, keyboard-navigable, and that the panel stays open when it is dismissed
+- [x] 6.4 Confirm the dialog renders without clipping on a narrow bar, a small screen, and a proportional theme, including with a long home directory path in the disclosure
+- [x] 6.5 Confirm an action started with the panel closed, and an action completing with panels open on two screens, both report the same outcome and dismiss together
+- [x] 6.6 Confirm a status refresh after an action leaves the outcome on screen
