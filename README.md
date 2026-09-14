@@ -54,6 +54,26 @@ progress, and a streak of the last seven days.
 > manager; and the setup card has been driven by hand in a live bar — see
 > [Verification status](#verification-status).
 
+## Requirements
+
+Writing Critter was exercised on Omarchy 4.0.3-1 with Quickshell 0.3.1,
+Python 3.14.7, and systemd 261. Those are the tested versions, not a claim of
+minimum supported versions.
+
+To run it, you need:
+
+- Omarchy Quattro and its Quickshell bar.
+- A Hyprland session with `hyprctl`, which the engine uses to learn which app
+  has focus.
+- Python 3. The bundled engine uses only Python's standard library.
+- A working systemd user manager (`systemctl --user`) for the optional counting
+  engine.
+- Bash only if you use `install.sh` or `uninstall.sh` in a terminal; the panel
+  does not use those wrappers.
+
+For contributors, the [Development](#development) checks also use Node.js,
+the Qt 6 `qmllint`, and Omarchy's plugin validator.
+
 ## It does not read your keyboard
 
 The obvious way to count words you type is to read the keyboard. On Wayland that
@@ -323,7 +343,7 @@ it is asleep. On a vertical bar the numbers move to the tooltip regardless.
 
 ## How it works
 
-Every 2 seconds, **and only while a configured writing app is focused**, a
+Every second, **and only while a configured writing app is focused**, a
 metadata-only scan looks for recently modified files, then re-counts *only
 those*. Idle ticks read nothing at all.
 
@@ -467,11 +487,17 @@ swaps the engine underneath a running process.
 | Keyboard, themes and bar layouts | ✅ exercised alongside the setup card |
 | Screenshot / marketplace submission | ⬜ pending |
 
+The [release verification record](docs/RELEASE-VERIFICATION.md) separates
+completed checks from the pending live stability gate; it does not claim
+marketplace approval.
+
 ### For a marketplace reviewer
 
-`omarchy plugin validate` reports this repository as having **installer** and
-**service-management** capabilities. Both are real and both are the point of
-the setup flow above; they are declared here rather than worked around.
+`omarchy plugin validate` checks the local manifest and plugin layout. The
+Marketplace Automated Security Baseline is expected to report **installer**
+and **service-management** capabilities for this repository; its actual report
+is authoritative. Both capabilities are real and are the point of the setup
+flow above; they are declared here rather than worked around.
 
 What they cover, exactly:
 
@@ -488,7 +514,14 @@ line.
 
 Design rationale and the full technical spec live in
 [`writing-critter-spec.md`](writing-critter-spec.md) and
-[`openspec/changes/add-writing-critter-plugin/`](openspec/changes/add-writing-critter-plugin/).
+[`openspec/changes/archive/2026-09-03-add-writing-critter-plugin/`](openspec/changes/archive/2026-09-03-add-writing-critter-plugin/).
+
+## Publishing
+
+The marketplace submission draft and publishing checklist are in
+[docs/MARKETPLACE-SUBMISSION.md](docs/MARKETPLACE-SUBMISSION.md) and
+[docs/PUBLISHING.md](docs/PUBLISHING.md). They prepare a submission but do not
+claim that this plugin has been listed or verified.
 
 ## License
 
